@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>人生財務戰略導航模擬器</title>
+    <!-- 告訴 Trunk 這是 GitHub Pages 的子路徑 -->
+    <base href="/financial_simulator/" />
+    <script src="https://cdn.plot.ly/plotly-3.0.1.min.js" charset="utf-8"></script>
+<link rel="modulepreload" href="/financial_simulator/financial_simulator-1a77a09a06d762a8.js" crossorigin="anonymous" integrity="sha384-JbyUjSLjW9WUnAj1AULDuWJbrXfZBCO3lavcfmwLG9BvkC86EKMDHKTgnQOpEaFj"><link rel="preload" href="/financial_simulator/financial_simulator-1a77a09a06d762a8_bg.wasm" crossorigin="anonymous" integrity="sha384-vg5wZLHk91LWVn/6o7YmEff+eoe8GsOMS+MoVML/TwlJtF1yjIyqxvenDRnsmwzl" as="fetch" type="application/wasm"></head>
+<body>
+    <!-- Leptos 的 WASM 會自動把 UI 挂載到 body 上 -->
+
+<script type="module">
+import init, * as bindings from '/financial_simulator/financial_simulator-1a77a09a06d762a8.js';
+const wasm = await init({ module_or_path: '/financial_simulator/financial_simulator-1a77a09a06d762a8_bg.wasm' });
+
+
+window.wasmBindings = bindings;
+
+
+dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
+
+</script></body>
+</html>
