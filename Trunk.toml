@@ -1,0 +1,4 @@
+[build]
+# ✨【設定關鍵】：將 public_url 改為你的 GitHub 專案（Repository）名稱
+# 假設你的專案叫 financial_simulator，前後都要加上斜線
+public_url = "/financial_simulator/"

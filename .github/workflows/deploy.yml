@@ -1,0 +1,37 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Trunk
+        # 加上檢查機制，如果快取裡已經有 trunk 就不重複安裝，省下大量時間
+        run: |
+          if ! command -v trunk &> /dev/null; then
+            cargo install trunk --locked
+          fi
+
+      - name: Build Project
+        run: trunk build --release --public-url /${{ github.event.repository.name }}/
+
+      - name: Deploy to GitHub Pages
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          folder: dist
+          branch: gh-pages
