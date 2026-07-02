@@ -259,21 +259,9 @@ body {
    ===================================================================== */
 .graph-container {
   width: 100%;
-  /* 預設展開狀態下的圖表高度：使用 clamp 確保高度比例完美契合螢幕 */
-  height: clamp(360px, 68vh, 720px);
   background-color: var(--bg-secondary);
   border-radius: 8px;
   overflow: hidden;
-  /* 💡 核心聯動動畫：當高度發生改變時，提供 0.2 秒平滑緩動，
-     好配合 Rust 端的 request_animation_frame 進行無縫隙的重繪渲染 */
-  transition: height 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-/* 💡 高級 CSS 黑魔法：透過 :has() 選擇器，全自動偵測父容器狀態。
-   當 .controls-panel 內部沒有包含 .panel-open 類別時（代表面板已被收合），
-   圖表容器會被自動通知「全面增高」，完美吞噬並補回被讓出的螢幕空間。 */
-.app-container:has(.controls-panel:not(.panel-open)) .graph-container {
-  height: clamp(420px, 82vh, 860px);
 }
 
 /* =====================================================================
@@ -311,17 +299,6 @@ body {
   .control-select {
     font-size: 13px;
     padding: 9px 34px 9px 10px;
-  }
-
-  /* 手機直向模式下，圖表高度稍微收緊，留出黃金閱讀比例 */
-  .graph-container {
-    height: clamp(300px, 56vh, 480px);
-    border-radius: 6px;
-  }
-
-  /* 手機直向收合面板時，圖表向上填滿，提供最大視野 */
-  .app-container:has(.controls-panel:not(.panel-open)) .graph-container {
-    height: clamp(360px, 74vh, 620px);
   }
 }
 
@@ -374,14 +351,5 @@ body {
     min-height: 36px;
     font-size: 12px;
     padding: 7px 30px 7px 9px;
-  }
-
-  .graph-container {
-    height: clamp(180px, 42vh, 300px);
-  }
-
-  /* 面板收合後，圖表可以瞬間霸佔 80vh 的垂直維度，體驗極佳 */
-  .app-container:has(.controls-panel:not(.panel-open)) .graph-container {
-    height: clamp(280px, 80vh, 420px);
   }
 }
