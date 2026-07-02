@@ -551,11 +551,13 @@ dependencies = [
 name = "financial_simulator"
 version = "0.1.0"
 dependencies = [
+ "js-sys",
  "leptos",
  "plotly",
  "serde",
  "serde_json",
  "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]

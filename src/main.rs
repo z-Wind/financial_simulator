@@ -1,9 +1,10 @@
 use leptos::prelude::*;
 use plotly::common::{Anchor, DashType, Font, HoverInfo, Label, Line, TickMode, Title};
 use plotly::layout::{
-    Annotation, Axis, AxisType, Layout, Legend, Margin, Shape, ShapeLine, ShapeType,
+    Annotation, Axis, AxisType, HoverMode, Layout, Legend, Margin, Shape, ShapeLayer, ShapeLine,
+    ShapeType,
 };
-use plotly::{Plot, Scatter};
+use plotly::{Configuration, Plot, Scatter};
 use std::collections::HashMap;
 
 // =====================================================================
@@ -387,7 +388,7 @@ pub fn generate_plot(
                     .width(line_width)
                     .dash(dash_type),
             )
-            .layer(plotly::layout::ShapeLayer::Below);
+            .layer(ShapeLayer::Below);
         shapes.push(shape);
     }
 
@@ -472,8 +473,8 @@ pub fn generate_plot(
         .title(title)
         .paper_background_color("#0F172A")
         .plot_background_color("#0F172A")
-        .margin(Margin::new().left(75).right(60).top(50).bottom(60))
-        .hover_mode(plotly::layout::HoverMode::X)
+        .margin(Margin::new().left(60).right(40).top(48).bottom(55))
+        .hover_mode(HoverMode::X)
         .hover_label(hover_label)
         .legend(legend)
         .x_axis(x_axis)
@@ -482,6 +483,8 @@ pub fn generate_plot(
         .annotations(anns);
 
     plot.set_layout(layout);
+    // 開啟 responsive，讓圖表能隨容器/視窗尺寸變化（例如手機旋轉、桌機拉伸視窗）自動重新繪製大小
+    plot.set_configuration(Configuration::new().responsive(true));
     plot
 }
 
@@ -496,6 +499,9 @@ fn App() -> impl IntoView {
     let (h_inv, set_h_inv) = signal(30000.0_f64);
     let (anchor_roi, set_anchor_roi) = signal(10_usize);
     let (f_inv, set_f_inv) = signal(0.0_f64);
+
+    // 控制面板展開/收合狀態（預設展開）
+    let (panel_open, set_panel_open) = signal(true);
 
     // 完美復刻 Callback 防呆機制
     Effect::new(move |_| {
@@ -529,124 +535,154 @@ fn App() -> impl IntoView {
         plot_view();
     });
 
-    // 提取共用的高質感 Dropdown 樣式字串
-    let select_style = "width: 100%; padding: 10px 40px 10px 12px; border-radius: 6px; \
-                        background-color: #1E293B; color: #F8FAFC; border: 1px solid #475569; \
-                        font-size: 14px; font-family: 'Microsoft JhengHei'; cursor: pointer; \
-                        appearance: none; -webkit-appearance: none; -moz-appearance: none; \
-                        box-sizing: border-box; \
-                        background-image: url('data:image/svg+xml;charset=US-ASCII,<svg xmlns=\"http://w3.org\" width=\"292.4\" height=\"292.4\" fill=\"%23CBD5E1\"><path d=\"M287 69.4a17.6 17.6 0 0 0-13-5.4H18.4c-5 0-9.3 1.8-12.9 5.4A17.6 17.6 0 0 0 0 82.2c0 5 1.8 9.3 5.4 12.9l128 127.9c3.6 3.6 7.8 5.4 12.8 5.4s9.2-1.8 12.8-5.4L287 95c3.5-3.5 5.4-7.8 5.4-12.8 0-5-1.9-9.2-5.5-12.8z\"/></svg>'); \
-                        background-repeat: no-repeat; background-position: right 12px top 50%; background-size: 12px auto;";
+    // 監聽面板收合狀態，當 panel_open 改變時，主動通知 Plotly 重新計算 RWD 高度
+    Effect::new(move |_| {
+        // 讀取訊號使其與此 Effect 綁定
+        let _ = panel_open.get();
+
+        #[cfg(target_family = "wasm")]
+        {
+            // 利用網頁標準的 window.request_animation_frame
+            // 這是瀏覽器效能最好的核心 API，能完美同步 CSS 的 :has 伸縮動畫
+            if let Some(window) = web_sys::window() {
+                let _ = window.request_animation_frame(
+                    &js_sys::Function::new_no_args(
+                        "if(window.Plotly){ Plotly.Plots.resize(document.getElementById('financial-graph')); }"
+                    )
+                );
+            }
+        }
+    });
 
     view! {
-        <div style="background-color: #0F172A; padding: 20px; font-family: 'Microsoft JhengHei', sans-serif; min-height: 100vh; color: #F8FAFC; box-sizing: border-box;">
-            <h2 style="text-align: center; margin-bottom: 25px; color: #F8FAFC; font-weight: bold;">"人生財務戰略導航：現況資產錨定與未來變革推演模擬器"</h2>
+        <div class="app-container">
+            <h2 class="app-title">"人生財務戰略導航：現況資產錨定與未來變革推演模擬器"</h2>
 
-            // 💡 完美還原 Python 的 html.Div 彈性布局，設定 15px 完美間距
-            <div style="display: flex; justify-content: space-between; margin-bottom: 20px; gap: 15px; flex-wrap: nowrap; width: 100%; box-sizing: border-box;">
+            // 💡 可收合的控制面板
+            // 用 Leptos signal 管理展開/收合，避免 <details> 的 open 屬性被 Leptos reconcile 重置的問題
+            <div class=move || if panel_open.get() { "controls-panel panel-open" } else { "controls-panel" }>
+                // 標題列兼收合按鈕
+                <button
+                    class="controls-summary"
+                    on:click=move |_| set_panel_open.update(|v| *v = !*v)
+                >
+                    <span class="summary-title">"⚙️ 模擬參數設定"</span>
+                    <span class=move || if panel_open.get() { "panel-status-badge badge-open" } else { "panel-status-badge" }>
+                        <span class="badge-text">
+                            {move || if panel_open.get() { "收合設定" } else { "修改參數" }}
+                        </span>
+                        <span class="badge-arrow">"▾"</span>
+                    </span>
+                </button>
 
-                // ⚙️ 步驟零：設定總模擬年數 (flex: 1)
-                <div style="flex: 1; box-sizing: border-box;">
-                    // ✨【關鍵修正】：拿掉防爆截斷，讓步驟文字完整大氣展開，絕對不卡字！
-                    <label style="color: #CBD5E1; font-weight: bold; display: block; margin-bottom: 8px; white-space: nowrap; font-size: 14px;">"⚙️ 步驟零：設定總模擬年數"</label>
-                    <div style="position: relative;">
-                        <select style=select_style on:change=move |ev| {
-                            if let Ok(val) = event_target_value(&ev).parse::<usize>() { set_total_years.set(val); }
-                        }>
-                            {[30, 35, 40, 45, 50, 55, 60].iter().map(|&y| {
-                                let is_selected = total_years.get() == y;
-                                view! { <option value=y selected=is_selected>{format!("🔮 總共模擬 {} 年", y)}</option> }
-                            }).collect::<Vec<_>>()}
-                        </select>
+                // 收合時整個 body 被移出 DOM，展開時才插回來
+                <Show when=move || panel_open.get()>
+                    <div class="controls-body">
+                        // 💡 響應式控制列：使用 CSS grid (auto-fit)，桌機排 5 欄，窄螢幕自動換行甚至單欄堆疊
+                        <div class="controls-grid">
+
+                            // 🧿 步驟零：設定總模擬年數
+                            // ✨ 用 move || 包住，才能在 total_years 改變時重新計算 is_selected
+                            <div class="control-group">
+                                <label class="control-label">"🧿 步驟零：設定總模擬年數"</label>
+                                <div class="select-wrapper">
+                                    <select class="control-select" on:change=move |ev| {
+                                        if let Ok(val) = event_target_value(&ev).parse::<usize>() { set_total_years.set(val); }
+                                    }>
+                                        {move || [30, 35, 40, 45, 50, 55, 60].iter().map(|&y| {
+                                            let is_selected = total_years.get() == y;
+                                            view! { <option value=y selected=is_selected>{format!("🔮 總共模擬 {} 年", y)}</option> }
+                                        }).collect::<Vec<_>>()}
+                                    </select>
+                                </div>
+                            </div>
+
+                            // 📆 步驟一：設定已投資年數（已有 move ||，不需再改）
+                            <div class="control-group">
+                                <label class="control-label">"📆 步驟一：設定已投資年數"</label>
+                                <div class="select-wrapper">
+                                    <select class="control-select" on:change=move |ev| {
+                                        if let Ok(val) = event_target_value(&ev).parse::<usize>() { set_hist_years.set(val); }
+                                    }>
+                                        {move || (0..=total_years.get()).map(|y| {
+                                            let label = if y == 0 { "🆕 剛要開始 (0 年)".to_string() } else { format!("⏳ 已投入 {} 年", y) };
+                                            let is_selected = hist_years.get() == y;
+                                            view! { <option value=y selected=is_selected>{label}</option> }
+                                        }).collect::<Vec<_>>()}
+                                    </select>
+                                </div>
+                            </div>
+
+                            // 🟢 步驟二：設定過去每月投入金額
+                            <div class="control-group">
+                                <label class="control-label">"🟢 步驟二：設定過去每月投入金額"</label>
+                                <div class="select-wrapper">
+                                    <select class="control-select" on:change=move |ev| {
+                                        if let Ok(val) = event_target_value(&ev).parse::<f64>() { set_h_inv.set(val); }
+                                    }>
+                                        {move || (1..=20).map(|i| {
+                                            let h = (i * 5000) as f64;
+                                            let label = format!("💰 每月投入：{}", format_twd_financial(h));
+                                            let is_selected = h_inv.get() == h;
+                                            view! { <option value=h selected=is_selected>{label}</option> }
+                                        }).collect::<Vec<_>>()}
+                                    </select>
+                                </div>
+                            </div>
+
+                            // 🎯 步驟三：對照目前資產，錨定過去報酬率
+                            <div class="control-group">
+                                <label class="control-label accent">"🎯 步驟三：對照目前資產，錨定過去報酬率"</label>
+                                <div class="select-wrapper">
+                                    <select class="control-select" on:change=move |ev| {
+                                        if let Ok(val) = event_target_value(&ev).parse::<usize>() {
+                                            set_anchor_roi.set(val);
+                                        }
+                                    }>
+                                        {move || (0..=20).map(|r| {
+                                            let label = if r == 0 {
+                                                "⚖️ 報酬率：0%".to_string()
+                                            } else {
+                                                format!("📈 年化報酬率：{}%", r)
+                                            };
+                                            let is_selected = anchor_roi.get() == r;
+                                            view! { <option value=r selected=is_selected>{label}</option> }
+                                        }).collect::<Vec<_>>()}
+                                    </select>
+                                </div>
+                            </div>
+
+                            // 🔵 步驟四：模擬未來每月改投金額
+                            <div class="control-group">
+                                <label class="control-label">"🔵 步驟四：模擬未來每月改投金額"</label>
+                                <div class="select-wrapper">
+                                    <select class="control-select" on:change=move |ev| {
+                                        if let Ok(val) = event_target_value(&ev).parse::<f64>() { set_f_inv.set(val); }
+                                    }>
+                                        {move || (-20..=20).map(|i| {
+                                            let f = (i * 5000) as f64;
+                                            let label = if i == 0 {
+                                                "🛑 未來不再投入".to_string()
+                                            } else if i > 0 {
+                                                format!("💰 每月改投：{}", format_twd_financial(f))
+                                            } else {
+                                                format!("💸 每月提領：{}", format_twd_financial(f.abs()))
+                                            };
+                                            let is_selected = f_inv.get() == f;
+                                            view! { <option value=f selected=is_selected>{label}</option> }
+                                        }).collect::<Vec<_>>()}
+                                    </select>
+                                </div>
+                            </div>
+
+                        </div>
                     </div>
-                </div>
-
-                // 📆 步驟一：設定已投資年數 (flex: 1)
-                <div style="flex: 1; box-sizing: border-box;">
-                    <label style="color: #CBD5E1; font-weight: bold; display: block; margin-bottom: 8px; white-space: nowrap; font-size: 14px;">"📆 步驟一：設定已投資年數"</label>
-                    <div style="position: relative;">
-                        <select style=select_style on:change=move |ev| {
-                            if let Ok(val) = event_target_value(&ev).parse::<usize>() { set_hist_years.set(val); }
-                        }>
-                            {move || (0..=total_years.get()).map(|y| {
-                                let label = if y == 0 { "🆕 剛要開始 (0 年)".to_string() } else { format!("⏳ 已投入 {} 年", y) };
-                                let is_selected = hist_years.get() == y;
-                                view! { <option value=y selected=is_selected>{label}</option> }
-                            }).collect::<Vec<_>>()}
-                        </select>
-                    </div>
-                </div>
-
-                // 🟢 步驟二：設定過去每月投入金額 (flex: 1)
-                <div style="flex: 1; box-sizing: border-box;">
-                    <label style="color: #CBD5E1; font-weight: bold; display: block; margin-bottom: 8px; white-space: nowrap; font-size: 14px;">"🟢 步驟二：設定過去每月投入金額"</label>
-                    <div style="position: relative;">
-                        <select style=select_style on:change=move |ev| {
-                            if let Ok(val) = event_target_value(&ev).parse::<f64>() { set_h_inv.set(val); }
-                        }>
-                            {(1..=20).map(|i| {
-                                let h = (i * 5000) as f64;
-                                let label = format!("💰 每月投入：{}", format_twd_financial(h));
-                                let is_selected = h_inv.get() == h;
-                                view! { <option value=h selected=is_selected>{label}</option> }
-                            }).collect::<Vec<_>>()}
-                        </select>
-                    </div>
-                </div>
-
-                // 🎯 步驟三：對照目前資產，錨定過去報酬率 (flex: 1)
-                <div style="flex: 1; box-sizing: border-box;">
-                    <label style="color: #F43F5E; font-weight: bold; display: block; margin-bottom: 8px; white-space: nowrap; font-size: 14px;">"🎯 步驟三：對照目前資產，錨定過去報酬率"</label>
-                    <div style="position: relative;">
-                        <select style=select_style on:change=move |ev| {
-                            // ✨【核心型態優化】：直接解析為無符號 usize，消除多餘的 i32 強轉安全隱患
-                            if let Ok(val) = event_target_value(&ev).parse::<usize>() {
-                                set_anchor_roi.set(val);
-                            }
-                        }>
-                            // ✨【核心優化】：用整數範圍 (0..=20) 動態產生 0% 到 20% 間隔 1% 的所有選項
-                            {(0..=20).map(|r| {
-                                let label = if r == 0 {
-                                    "⚖️ 報酬率：0%".to_string()
-                                } else {
-                                    format!("📈 年化報酬率：{}%", r)
-                                };
-                                let is_selected = anchor_roi.get() == r;
-                                view! { <option value=r selected=is_selected>{label}</option> }
-                            }).collect::<Vec<_>>()}
-                        </select>
-                    </div>
-                </div>
-
-                // 🔵 步驟四：模擬未來每月改投金額 (flex: 1)
-                <div style="flex: 1; box-sizing: border-box;">
-                    <label style="color: #CBD5E1; font-weight: bold; display: block; margin-bottom: 8px; white-space: nowrap; font-size: 14px;">"🔵 步驟四：模擬未來每月改投金額"</label>
-                    <div style="position: relative;">
-                        <select style=select_style on:change=move |ev| {
-                            if let Ok(val) = event_target_value(&ev).parse::<f64>() { set_f_inv.set(val); }
-                        }>
-                            // ✨【核心跨區優化】：用整數範圍 (-20..=20) 乘以 5000.0
-                            // 完美覆蓋 -100,000 到 +100,000 的完整級距，免去手動寫大矩陣陣列
-                            {(-20..=20).map(|i| {
-                                let f = (i * 5000) as f64;
-                                let label = if i == 0 {
-                                    "🛑 未來不再投入".to_string()
-                                } else if i > 0 {
-                                    format!("💰 每月改投：{}", format_twd_financial(f))
-                                } else {
-                                    format!("💸 每月提領：{}", format_twd_financial(f.abs()))
-                                };
-                                let is_selected = f_inv.get() == f;
-                                view! { <option value=f selected=is_selected>{label}</option> }
-                            }).collect::<Vec<_>>()}
-                        </select>
-                    </div>
-                </div>
-
+                </Show>
             </div>
 
-            // 圖表渲染容器 (72vh)
-            <div id="financial-graph" style="height: 72vh; background-color: #1E293B; border-radius: 8px; box-sizing: border-box;"></div>
+            // 圖表渲染容器：高度改用 CSS clamp()，桌機/平板/手機平滑縮放；
+            // 控制面板收合時（.panel-open 消失）:has() 讓圖表自動長高
+            <div id="financial-graph" class="graph-container"></div>
         </div>
     }
 }
