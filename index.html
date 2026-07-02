@@ -10,13 +10,13 @@
     <!-- 讓 Trunk 打包時把 style.css 一起處理並注入 <head> -->
     <link rel="stylesheet" href="/financial_simulator/style-9e51f451f5fbc2d4.css" integrity="sha384-JbaQ4H8s3qIE+V6OEZ/VDDXNhLTmNmcmB7S8JXF9QS738pOWJcDZr7wva6S1GDt7"/>
     <script src="https://cdn.plot.ly/plotly-3.0.1.min.js" charset="utf-8"></script>
-<link rel="modulepreload" href="/financial_simulator/financial_simulator-6e68ff25c189975f.js" crossorigin="anonymous" integrity="sha384-yEYwesZ2B1e72act6HGnxxMa1zetvNs1f9hcgu4B6uRts/BXMQoyevImi+0GCRtg"><link rel="preload" href="/financial_simulator/financial_simulator-6e68ff25c189975f_bg.wasm" crossorigin="anonymous" integrity="sha384-J7pf0+/tARWbboEsItCVGxluyS3mJ0X3CFP/rrLFeI7HDiDzDj1L63R1anG9LQX4" as="fetch" type="application/wasm"></head>
+<link rel="modulepreload" href="/financial_simulator/financial_simulator-4c5c0e8f99b35143.js" crossorigin="anonymous" integrity="sha384-yEYwesZ2B1e72act6HGnxxMa1zetvNs1f9hcgu4B6uRts/BXMQoyevImi+0GCRtg"><link rel="preload" href="/financial_simulator/financial_simulator-4c5c0e8f99b35143_bg.wasm" crossorigin="anonymous" integrity="sha384-kqsNaBfEuzk8xoGAzuyv+PbFNQ9RY9LAEH02HSXbq5ww6Wpvme8Qgc4VriFknzZY" as="fetch" type="application/wasm"></head>
 <body>
     <!-- Leptos 的 WASM 會自動把 UI 挂載到 body 上 -->
 
 <script type="module">
-import init, * as bindings from '/financial_simulator/financial_simulator-6e68ff25c189975f.js';
-const wasm = await init({ module_or_path: '/financial_simulator/financial_simulator-6e68ff25c189975f_bg.wasm' });
+import init, * as bindings from '/financial_simulator/financial_simulator-4c5c0e8f99b35143.js';
+const wasm = await init({ module_or_path: '/financial_simulator/financial_simulator-4c5c0e8f99b35143_bg.wasm' });
 
 
 window.wasmBindings = bindings;
