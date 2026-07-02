@@ -1,8 +1,9 @@
 use leptos::prelude::*;
 use plotly::common::{Anchor, DashType, Font, HoverInfo, Label, Line, TickMode, Title};
+use plotly::configuration::DisplayModeBar;
 use plotly::layout::{
-    Annotation, Axis, AxisType, HoverMode, Layout, Legend, Margin, Shape, ShapeLayer, ShapeLine,
-    ShapeType,
+    Annotation, Axis, AxisType, DragMode, HoverMode, Layout, Legend, Margin, Shape, ShapeLayer,
+    ShapeLine, ShapeType,
 };
 use plotly::{Configuration, Plot, Scatter};
 use std::collections::HashMap;
@@ -394,11 +395,6 @@ pub fn generate_plot(
 
     // 調用你親自修復通過的真·無錯誤高規格 Layout
     let x_axis = Axis::new()
-        .title(
-            Title::new()
-                .text("時間推移軸 (Timeline)")
-                .font(Font::new().color("#F8FAFC").size(14)),
-        )
         .type_(AxisType::Linear)
         .tick_mode(TickMode::Array)
         .tick_values(x_ticks)
@@ -470,6 +466,7 @@ pub fn generate_plot(
         );
 
     let layout = Layout::new()
+        .drag_mode(DragMode::False)
         .title(title)
         .paper_background_color("#0F172A")
         .plot_background_color("#0F172A")
@@ -484,7 +481,11 @@ pub fn generate_plot(
 
     plot.set_layout(layout);
     // 開啟 responsive，讓圖表能隨容器/視窗尺寸變化（例如手機旋轉、桌機拉伸視窗）自動重新繪製大小
-    plot.set_configuration(Configuration::new().responsive(true));
+    plot.set_configuration(
+        Configuration::new()
+            .responsive(true)
+            .display_mode_bar(DisplayModeBar::False),
+    );
     plot
 }
 
@@ -537,19 +538,18 @@ fn App() -> impl IntoView {
 
     // 監聽面板收合狀態，當 panel_open 改變時，主動通知 Plotly 重新計算 RWD 高度
     Effect::new(move |_| {
-        // 讀取訊號使其與此 Effect 綁定
         let _ = panel_open.get();
 
         #[cfg(target_family = "wasm")]
         {
-            // 利用網頁標準的 window.request_animation_frame
-            // 這是瀏覽器效能最好的核心 API，能完美同步 CSS 的 :has 伸縮動畫
             if let Some(window) = web_sys::window() {
-                let _ = window.request_animation_frame(
-                    &js_sys::Function::new_no_args(
-                        "if(window.Plotly){ Plotly.Plots.resize(document.getElementById('financial-graph')); }"
-                    )
-                );
+                let _ = window.request_animation_frame(&js_sys::Function::new_no_args(
+                    "setTimeout(function() { \
+                            if(window.Plotly && document.getElementById('financial-graph')){ \
+                                Plotly.Plots.resize(document.getElementById('financial-graph')); \
+                            } \
+                         }, 50);", // 🚀 縮短至 50 毫秒防呆即可，一眨眼圖表就變大！
+                ));
             }
         }
     });
@@ -584,7 +584,7 @@ fn App() -> impl IntoView {
                             // 🧿 步驟零：設定總模擬年數
                             // ✨ 用 move || 包住，才能在 total_years 改變時重新計算 is_selected
                             <div class="control-group">
-                                <label class="control-label">"🧿 步驟零：設定總模擬年數"</label>
+                                <label class="control-label">"🧿 零：設定總模擬年數"</label>
                                 <div class="select-wrapper">
                                     <select class="control-select" on:change=move |ev| {
                                         if let Ok(val) = event_target_value(&ev).parse::<usize>() { set_total_years.set(val); }
@@ -599,7 +599,7 @@ fn App() -> impl IntoView {
 
                             // 📆 步驟一：設定已投資年數（已有 move ||，不需再改）
                             <div class="control-group">
-                                <label class="control-label">"📆 步驟一：設定已投資年數"</label>
+                                <label class="control-label">"📆 一：設定已投資年數"</label>
                                 <div class="select-wrapper">
                                     <select class="control-select" on:change=move |ev| {
                                         if let Ok(val) = event_target_value(&ev).parse::<usize>() { set_hist_years.set(val); }
@@ -615,7 +615,7 @@ fn App() -> impl IntoView {
 
                             // 🟢 步驟二：設定過去每月投入金額
                             <div class="control-group">
-                                <label class="control-label">"🟢 步驟二：設定過去每月投入金額"</label>
+                                <label class="control-label">"🟢 二：設定過去每月投入金額"</label>
                                 <div class="select-wrapper">
                                     <select class="control-select" on:change=move |ev| {
                                         if let Ok(val) = event_target_value(&ev).parse::<f64>() { set_h_inv.set(val); }
@@ -632,7 +632,7 @@ fn App() -> impl IntoView {
 
                             // 🎯 步驟三：對照目前資產，錨定過去報酬率
                             <div class="control-group">
-                                <label class="control-label accent">"🎯 步驟三：對照目前資產，錨定過去報酬率"</label>
+                                <label class="control-label accent">"🎯 三：目前資產錨定過去報酬"</label>
                                 <div class="select-wrapper">
                                     <select class="control-select" on:change=move |ev| {
                                         if let Ok(val) = event_target_value(&ev).parse::<usize>() {
@@ -654,7 +654,7 @@ fn App() -> impl IntoView {
 
                             // 🔵 步驟四：模擬未來每月改投金額
                             <div class="control-group">
-                                <label class="control-label">"🔵 步驟四：模擬未來每月改投金額"</label>
+                                <label class="control-label">"🔵 四：模擬未來每月改投金額"</label>
                                 <div class="select-wrapper">
                                     <select class="control-select" on:change=move |ev| {
                                         if let Ok(val) = event_target_value(&ev).parse::<f64>() { set_f_inv.set(val); }
@@ -682,7 +682,20 @@ fn App() -> impl IntoView {
 
             // 圖表渲染容器：高度改用 CSS clamp()，桌機/平板/手機平滑縮放；
             // 控制面板收合時（.panel-open 消失）:has() 讓圖表自動長高
-            <div id="financial-graph" class="graph-container"></div>
+            <div
+                id="financial-graph"
+                class="graph-container"
+                style=move || {
+                    if panel_open.get() {
+                        // 🟢 面板展開狀態下的黃金高度
+                        "height: clamp(520px, 68vh, 720px);"
+                    } else {
+                        // 🔵 面板收合狀態下，由 Rust 強制下令「長高」！
+                        // 這樣做 100% 不會塌陷、不見，且不影響手機橫放的點擊！
+                        "height: clamp(520px, 82vh, 860px);"
+                    }
+                }
+            ></div>
         </div>
     }
 }
