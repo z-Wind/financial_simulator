@@ -5,8 +5,22 @@ on:
     branches:
       - main
 
+# 關鍵：賦予 Actions 官方 Pages 布署所需的安全性權限
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 避免多次 push 時的布署工作互相衝突
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
+
 jobs:
   deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -21,7 +35,6 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Install Trunk
-        # 加上檢查機制，如果快取裡已經有 trunk 就不重複安裝，省下大量時間
         run: |
           if ! command -v trunk &> /dev/null; then
             cargo install trunk --locked
@@ -30,8 +43,11 @@ jobs:
       - name: Build Project
         run: trunk build --release --public-url /${{ github.event.repository.name }}/
 
-      - name: Deploy to GitHub Pages
-        uses: JamesIves/github-pages-deploy-action@v4
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
         with:
-          folder: dist
-          branch: gh-pages
+          path: ./dist
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
