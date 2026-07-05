@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch: 
 
 # 關鍵：賦予 Actions 官方 Pages 布署所需的安全性權限
 permissions:
@@ -17,10 +18,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+  build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -40,6 +38,9 @@ jobs:
             cargo install trunk --locked
           fi
 
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
       - name: Build Project
         run: trunk build --release --public-url /${{ github.event.repository.name }}/
 
@@ -48,6 +49,16 @@ jobs:
         with:
           path: ./dist
 
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    needs: build
+    runs-on: ubuntu-latest
+    # 修正點 2：宣告輸出變數，將 deployment 步驟產生的網址正確映射到 Job 頂層的 url
+    outputs:
+      page_url: ${{ steps.deployment.outputs.page_url }}
+    steps:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
