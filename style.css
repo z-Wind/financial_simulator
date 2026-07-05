@@ -183,8 +183,8 @@ body {
    ===================================================================== */
 .controls-grid {
   display: grid;
-  /* 智慧型 auto-fit 功能：桌機端最多並排 5 欄，隨著螢幕變窄會自動平滑拆行與流動 */
-  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  /* 智慧型 auto-fit 功能：桌機端最多並排 6 欄，隨著螢幕變窄會自動平滑拆行與流動 */
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
   gap: 14px;
   width: 100%;
 }
@@ -255,8 +255,43 @@ body {
 }
 
 /* =====================================================================
-   # 5. 圖表自適應高度核心 (Graph Engine & Dynamic Height)
+   # 5. 圖表區域：標頭列 + 圖表容器 (Graph Header & Container)
    ===================================================================== */
+
+/* 截圖按鈕列：圖表上方右對齊，完全不進入 Plotly 渲染區域 */
+.chart-header {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 4px;
+}
+
+.screenshot-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(30, 41, 59, 0.88);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  padding: 5px 12px;
+  font-size: 0.82rem;
+  font-family: var(--font-family);
+  line-height: 1;
+  cursor: pointer;
+  transition: var(--transition-smooth);
+}
+
+.screenshot-btn:hover {
+  background: rgba(45, 212, 191, 0.12);
+  border-color: var(--accent-teal);
+  color: var(--accent-teal);
+  box-shadow: 0 0 8px rgba(45, 212, 191, 0.2);
+}
+
+.screenshot-btn:active {
+  transform: scale(0.93);
+}
+
 .graph-container {
   width: 100%;
   background-color: var(--bg-secondary);

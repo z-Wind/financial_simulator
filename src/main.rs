@@ -7,6 +7,8 @@ use plotly::layout::{
 };
 use plotly::{Configuration, Plot, Scatter};
 use std::collections::HashMap;
+#[cfg(target_family = "wasm")]
+use wasm_bindgen::JsCast;
 
 // =====================================================================
 // # 1. 智慧型金融格式化與等寬對齊模組
@@ -65,11 +67,33 @@ pub fn format_twd_financial(val: f64) -> String {
     }
 }
 
-pub fn make_clean_text_row(name_str: &str, val_str: &str) -> String {
-    format!(
-        "<span style='font-family:Consolas,monospace;'>{: <8} │ {: >9}</span>",
-        name_str, val_str
-    )
+pub fn make_clean_text_row(
+    name_str: &str,
+    val_str: &str,
+    real_val_str: &str,
+    highlight: bool,
+) -> String {
+    let style = if highlight {
+        "style='font-family:Consolas,monospace; color:#F43F5E; font-weight:bold;'"
+    } else {
+        "style='font-family:Consolas,monospace;'"
+    };
+
+    if val_str == real_val_str {
+        format!("<span {style}>{name_str:<8} │ {val_str:>9}</span>")
+    } else {
+        format!("<span {style}>{name_str:<8} │ {val_str:>9} │ 折現：{real_val_str:>9}</span>")
+    }
+}
+
+pub fn make_short_clean_text_row(name_str: &str, val_str: &str, highlight: bool) -> String {
+    let style = if highlight {
+        "style='font-family:Consolas,monospace; color:#F43F5E; font-weight:bold;'"
+    } else {
+        "style='font-family:Consolas,monospace;'"
+    };
+
+    format!("<span {style}>{name_str:<8} {val_str:>9}</span>")
 }
 
 // =====================================================================
@@ -77,35 +101,58 @@ pub fn make_clean_text_row(name_str: &str, val_str: &str) -> String {
 // =====================================================================
 pub fn calculate_true_pivot_trends(
     h_inv: f64,
-    f_inv: f64,
+    f_inv: f64, // 用戶在介面上輸入的金額：正數代表每月投入，負數代表每月提領
     anchor_roi: usize,
+    inflation_rate: usize,
     hist_years: usize,
     total_years: usize,
-) -> HashMap<usize, Vec<f64>> {
+) -> HashMap<usize, Vec<(f64, f64)>> {
     let hist_months = hist_years * 12;
     let total_months = total_years * 12;
     let future_months = total_months - hist_months;
 
     let anchor_monthly_rate = (1.0 + (anchor_roi as f64) / 100.0).powf(1.0 / 12.0) - 1.0;
-    let mut hist_route = vec![0.0];
+    let inflation_monthly_rate = (1.0 + (inflation_rate as f64) / 100.0).powf(1.0 / 12.0) - 1.0;
+
+    // 1. 歷史期間（已發生，無通膨，兩軸數值相同）
+    let mut hist_route = vec![(0.0, 0.0)];
     let mut curr_balance = 0.0;
 
     for _ in 1..=hist_months {
         curr_balance = (curr_balance + h_inv) * (1.0 + anchor_monthly_rate);
-        hist_route.push(curr_balance);
+        hist_route.push((curr_balance, curr_balance));
     }
 
-    let new_initial_asset = *hist_route.last().unwrap_or(&0.0);
+    let initial_asset = hist_route.last().map(|&(_, real)| real).unwrap_or(0.0);
     let mut trends = HashMap::new();
 
+    // 2. 未來期間
     for r in 0..=20 {
         let monthly_rate = (1.0 + (r as f64) / 100.0).powf(1.0 / 12.0) - 1.0;
         let mut full_route = hist_route.clone();
-        let mut curr_f = new_initial_asset;
+
+        let mut curr_nominal = initial_asset;
+        // 引入未來累計總通膨率，從 1.0 開始隨月份相乘累計
+        let mut future_inflation_factor = 1.0;
 
         for _ in 1..=future_months {
-            curr_f = (curr_f + f_inv) * (1.0 + monthly_rate);
-            full_route.push(curr_f);
+            // 累計當月的總通膨率
+            future_inflation_factor *= 1.0 + inflation_monthly_rate;
+
+            // 名目現金流動態判定：投入不變、提領隨通膨調整
+            let actual_nominal_cashflow = if f_inv >= 0.0 {
+                f_inv
+            } else {
+                f_inv * future_inflation_factor
+            };
+
+            // 完美的實質資產複利滾動公式
+            curr_nominal = (curr_nominal + actual_nominal_cashflow) * (1.0 + monthly_rate);
+
+            // 【核心鐵律應用】：名目必定等於 實質 * 累計通膨率
+            let curr_real = curr_nominal / future_inflation_factor;
+
+            full_route.push((curr_nominal, curr_real));
         }
         trends.insert(r, full_route);
     }
@@ -117,7 +164,7 @@ pub fn calculate_true_pivot_trends(
 // # 3. 動態標籤產生模組
 // =====================================================================
 pub fn get_annotations(
-    trends: &HashMap<usize, Vec<f64>>,
+    trends: &HashMap<usize, Vec<(f64, f64)>>,
     hist_years: usize,
     anchor_roi: usize,
     _total_years: usize,
@@ -126,7 +173,7 @@ pub fn get_annotations(
     let hist_idx = hist_years * 12;
 
     // 📍 歷史起點錨定初值
-    let amt_now = trends[&anchor_roi][hist_idx];
+    let amt_now = trends[&anchor_roi][hist_idx].0;
     let (y_val_log, text_str, show_arrow, ax, ay) = if hist_years > 0 {
         (
             amt_now.max(10000.0).log10(),
@@ -179,8 +226,20 @@ pub fn generate_plot(
     h_inv: f64,
     anchor_roi: usize,
     f_inv: f64,
+    inflation_rate: usize,
+    window_width: u32,
 ) -> Plot {
-    let trends = calculate_true_pivot_trends(h_inv, f_inv, anchor_roi, hist_years, total_years);
+    // 手機直向模式（寬度 < 640px）：縮減 legend 文字與位置，不影響桌機 / 橫向
+    let is_narrow = window_width < 640;
+
+    let trends = calculate_true_pivot_trends(
+        h_inv,
+        f_inv,
+        anchor_roi,
+        inflation_rate,
+        hist_years,
+        total_years,
+    );
     let total_months = total_years * 12;
     let hist_months = hist_years * 12;
     let x_numeric_timeline: Vec<f64> = (0..=total_months).map(|m| m as f64 / 12.0).collect();
@@ -191,33 +250,49 @@ pub fn generate_plot(
         colors.push(format!("rgba({}, {}, 255, 0.8)", 50 + i * 8, 80 + i * 5));
     }
 
-    let mut hover_labels_text = Vec::new();
+    // 預先配置好容量，避免動態擴容（對效能極佳）
+    let mut hover_labels_text = Vec::with_capacity(x_numeric_timeline.len());
+
     for (m, _) in x_numeric_timeline.iter().enumerate() {
         let y = m / 12;
         let mo = m % 12;
+
+        // 1. 簡化時間標頭判斷
         let time_header = if mo > 0 {
             format!("<b>第 {} 年 {} 個月</b>", y, mo)
         } else {
             format!("<b>第 {} 年整</b>", y)
         };
+
         let mut lines = vec![time_header, "────────────────────────".to_string()];
 
         if m <= hist_months {
             // 🟢 歷史區：只印出步驟三設定的指定報酬率（anchor_roi），消滅其餘重複數字！
-            let val_str = format_twd_financial(trends[&anchor_roi][m]);
+            let amt = trends[&anchor_roi][m];
             lines.push(make_clean_text_row(
                 &format!("ROI {:2}%", anchor_roi),
-                &val_str,
+                &format_twd_financial(amt.0),
+                &format_twd_financial(amt.1),
+                false,
             ));
         } else {
-            // 🔵 未來區：跨過分水嶺，由大到小 (20 到 0) 完整塞入 21 條線的財富數字！
+            // 🔵 未來區：跨過分水嶺，由大到小 (20 到 0) 完整塞入 21 條線
             for r in (0..=20).rev() {
-                let val_str = format_twd_financial(trends[&r][m]);
-                lines.push(make_clean_text_row(&format!("ROI {:2}%", r), &val_str));
+                let is_anchor = r == anchor_roi;
+                let amt: (f64, f64) = trends[&r][m];
+
+                lines.push(make_clean_text_row(
+                    &format!("ROI {:2}%", r),
+                    &format_twd_financial(amt.0),
+                    &format_twd_financial(amt.1),
+                    is_anchor, // 直接傳入布林變數，消滅整個 if-else 區塊
+                ));
             }
         }
         hover_labels_text.push(lines.join("<br>"));
     }
+
+    let mut hover_labels_opt = Some(hover_labels_text);
 
     let mut plot = Plot::new();
 
@@ -227,24 +302,43 @@ pub fn generate_plot(
         let total_idx = total_years * 12;
         let amt_future = trends[&r][total_idx]; // 取得這條線在第 40/90 年的終值
 
-        // 💡 彭博風格圖例字串：利用等寬字型排版，讓 ROI 與終值數字在 Legend 列表裡整齊排列
-        let legend_name = if r == anchor_roi {
-            format!(
-                "<span style='font-family:Consolas,monospace; color:#F43F5E; font-weight:bold;'>ROI {:2}% 主線 │ {}</span>",
-                r,
-                format_twd_financial(amt_future)
+        // 💡 圖例字串：桌機用完整等寬格式，手機直向用短格式省空間
+        let legend_name = if is_narrow {
+            // 手機直向：只顯示 ROI% 與折現終值（省去名目欄，大幅縮短每行寬度）
+            if r == anchor_roi {
+                make_short_clean_text_row(
+                    &format!("ROI {:2}%", r),
+                    &format_twd_financial(amt_future.1),
+                    true,
+                )
+            } else {
+                make_short_clean_text_row(
+                    &format!("ROI {:2}%", r),
+                    &format_twd_financial(amt_future.1),
+                    false,
+                )
+            }
+        } else if r == anchor_roi {
+            make_clean_text_row(
+                &format!("ROI {:2}% 主線", r),
+                &format_twd_financial(amt_future.0),
+                &format_twd_financial(amt_future.1),
+                true,
             )
         } else {
-            format!(
-                "<span style='font-family:Consolas,monospace;'>ROI {:2}% 未來 │ {}</span>",
-                r,
-                format_twd_financial(amt_future)
+            make_clean_text_row(
+                &format!("ROI {:2}% 未來", r),
+                &format_twd_financial(amt_future.0),
+                &format_twd_financial(amt_future.1),
+                false,
             )
         };
 
-        let mut trace = Scatter::new(x_numeric_timeline.clone(), trends[&r].clone())
-            .name(legend_name)
-            .hover_info(HoverInfo::Skip);
+        let mut trace = Scatter::new(
+            x_numeric_timeline.clone(),
+            trends[&r].iter().map(|x| x.0).collect(),
+        )
+        .name(legend_name);
 
         let color = if r == anchor_roi {
             "#F43F5E".to_string()
@@ -262,40 +356,77 @@ pub fn generate_plot(
         trace = trace
             .line(Line::new().color(color).width(width))
             .show_legend(is_p);
+
+        if r == anchor_roi {
+            if let Some(labels) = hover_labels_opt.take() {
+                trace = trace
+                    .text_array(labels)
+                    .hover_template("%{text}<extra></extra>");
+            }
+        } else {
+            trace = trace.hover_info(HoverInfo::Skip);
+        }
         plot.add_trace(trace);
     }
 
     // 未來純本金線的圖例
-    let amt_principal_future = trends[&0][total_years * 12];
-    let principal_name = format!(
-        "<span style='font-family:Consolas,monospace;'>ROI  0% 本金 │ {}</span>",
-        format_twd_financial(amt_principal_future)
-    );
+    if anchor_roi != 0 {
+        let amt_principal_future = trends[&0][total_years * 12];
+        let principal_name = if is_narrow {
+            make_short_clean_text_row(
+                "ROI  0%",
+                &format_twd_financial(amt_principal_future.1),
+                false,
+            )
+        } else {
+            make_clean_text_row(
+                "ROI  0% 本金",
+                &format_twd_financial(amt_principal_future.0),
+                &format_twd_financial(amt_principal_future.1),
+                false,
+            )
+        };
 
-    let principal_trace = Scatter::new(x_numeric_timeline.clone(), trends[&0].clone())
+        let principal_trace = Scatter::new(
+            x_numeric_timeline.clone(),
+            trends[&0].iter().map(|x| x.0).collect(),
+        )
         .name(principal_name)
         .line(Line::new().color("#A0AEC0").width(2.5).dash(DashType::Dash))
-        .text_array(hover_labels_text)
-        .hover_template("%{text}<extra></extra>")
-        .show_legend(true);
-    plot.add_trace(principal_trace);
+        .show_legend(true)
+        .hover_info(HoverInfo::Skip);
+
+        plot.add_trace(principal_trace);
+    }
 
     let future_plan_text = if f_inv > 0.0 {
-        format!("每月改投{}", format_twd_financial(f_inv))
+        format!("每月改投名目 {}", format_twd_financial(f_inv))
     } else if f_inv < 0.0 {
-        format!("每月提領{}", format_twd_financial(f_inv.abs()))
+        format!("每月提領實質 {}", format_twd_financial(f_inv.abs()))
     } else {
         "不再投入(利滾利)".to_string()
     };
 
-    let strategy_subtitle = format!(
-        "<br><span style='font-size: 13px; color: #2DD4BF; font-weight: normal; letter-spacing: 0.5px; line-height: 1.6;'>\
-        📊 配置戰略 ── 已投入：{} 年 ({}/月) │ 未來：{} 年 ({})</span>",
-        hist_years,
-        format_twd_financial(h_inv),
-        total_years - hist_years,
-        future_plan_text
-    );
+    let strategy_subtitle = if is_narrow {
+        format!(
+            "<br><span style='font-size: 11px; color: #2DD4BF; font-weight: normal;'>\
+            已投{}年 | 未來{}年 | {}</span>",
+            hist_years,
+            total_years - hist_years,
+            future_plan_text,
+        )
+    } else {
+        format!(
+            "<br><span style='font-size: 13px; color: #2DD4BF; font-weight: normal; \
+            letter-spacing: 0.5px; line-height: 1.6;'>\
+            📊 戰略配置 ── 已投 {}年 ({} /月) | 未來 {}年 [{}] | 折現通膨 {}%/年</span>",
+            hist_years,
+            format_twd_financial(h_inv),
+            total_years - hist_years,
+            future_plan_text,
+            inflation_rate,
+        )
+    };
 
     let anns = get_annotations(&trends, hist_years, anchor_roi, total_years);
 
@@ -399,17 +530,33 @@ pub fn generate_plot(
         .domain(&[0.05, 1.0])
         .auto_range(true);
 
-    let legend = Legend::new()
-        .y_anchor(Anchor::Bottom)
-        .y(0.1)
-        .x_anchor(Anchor::Right)
-        .x(0.99)
-        .background_color("rgba(30, 41, 59, 0.8)")
-        .border_color("#475569")
-        .border_width(1)
-        .font(Font::new().color("#F1F5F9"))
-        .item_click(ItemClick::False)
-        .item_double_click(ItemClick::False);
+    // 手機直向：legend 移到左上角（圖表資料集中在右側，左上通常是空白區域），字型縮至 8px
+    // 桌機 / 橫向：維持原本右下位置與預設字型大小，完全不受影響
+    let legend = if is_narrow {
+        Legend::new()
+            .y_anchor(Anchor::Top)
+            .y(0.99)
+            .x_anchor(Anchor::Left)
+            .x(0.01)
+            .background_color("rgba(30, 41, 59, 0.88)")
+            .border_color("#475569")
+            .border_width(1)
+            .font(Font::new().color("#F1F5F9").size(8))
+            .item_click(ItemClick::False)
+            .item_double_click(ItemClick::False)
+    } else {
+        Legend::new()
+            .y_anchor(Anchor::Bottom)
+            .y(0.1)
+            .x_anchor(Anchor::Right)
+            .x(0.99)
+            .background_color("rgba(30, 41, 59, 0.8)")
+            .border_color("#475569")
+            .border_width(1)
+            .font(Font::new().color("#F1F5F9"))
+            .item_click(ItemClick::False)
+            .item_double_click(ItemClick::False)
+    };
 
     let hover_label = Label::new()
         .background_color("rgba(15, 23, 42, 0.96)")
@@ -469,17 +616,57 @@ fn App() -> impl IntoView {
     let (h_inv, set_h_inv) = signal(30000.0_f64);
     let (anchor_roi, set_anchor_roi) = signal(10_usize);
     let (f_inv, set_f_inv) = signal(0.0_f64);
+    let (inflation_rate, set_inflation_rate) = signal(2_usize); // 預設 2%/年
     let (panel_open, set_panel_open) = signal(true);
+
+    // 視窗寬度 signal：用 resize 事件即時更新，手機旋轉時自動觸發圖表重繪
+    let initial_width: u32 = {
+        #[cfg(target_family = "wasm")]
+        {
+            web_sys::window()
+                .and_then(|w| w.inner_width().ok())
+                .and_then(|v| v.as_f64())
+                .unwrap_or(1920.0) as u32
+        }
+        #[cfg(not(target_family = "wasm"))]
+        {
+            1920
+        }
+    };
+    let (window_width, set_window_width) = signal(initial_width);
+
+    // 非 WASM 編譯（rust-analyzer / cargo check）時 set_window_width 不會被用到，
+    // 用 let _ 告訴編譯器這是刻意的，消除 unused variable 警告
+    #[cfg(not(target_family = "wasm"))]
+    let _ = set_window_width;
+
+    // 監聽 resize 事件（含手機旋轉），更新 signal → LocalResource 自動重新計算圖表
+    #[cfg(target_family = "wasm")]
+    {
+        let cb = wasm_bindgen::closure::Closure::<dyn Fn()>::new(move || {
+            if let Some(w) = web_sys::window()
+                .and_then(|w| w.inner_width().ok())
+                .and_then(|v| v.as_f64())
+            {
+                set_window_width.set(w as u32);
+            }
+        });
+        if let Some(win) = web_sys::window() {
+            let _ = win.add_event_listener_with_callback("resize", cb.as_ref().unchecked_ref());
+        }
+        cb.forget(); // event listener 需要持續存在，intentional leak
+    }
 
     // 核心安全修正：利用 Resource 統一追蹤依賴項，防止 Effect 非同步競態造成的畫面劇烈閃爍
     let plot_resource = LocalResource::new(move || async move {
-        // 直接在非同步閉包內讀取所有 Signal，Leptos 會全自動建立響應式追蹤鏈
         generate_plot(
             total_years.get(),
             hist_years.get(),
             h_inv.get(),
             anchor_roi.get(),
             f_inv.get(),
+            inflation_rate.get(),
+            window_width.get(), // 現在是 reactive！旋轉時自動觸發重繪
         )
     });
 
@@ -611,9 +798,29 @@ fn App() -> impl IntoView {
                                         {move || (-20..=20).map(|i| {
                                             let f = (i * 5000) as f64;
                                             let label = if i == 0 { "🛑 未來不再投入".to_string() }
-                                                else if i > 0 { format!("💰 每月改投：{}", format_twd_financial(f)) }
-                                                else { format!("💸 每月提領：{}", format_twd_financial(f.abs())) };
+                                                else if i > 0 { format!("💰 每月改投：名目 {}", format_twd_financial(f)) }
+                                                else { format!("💸 每月提領：實質 {}", format_twd_financial(f.abs())) };
                                             view! { <option value=f selected=move || f_inv.get() == f>{label}</option> }
+                                        }).collect::<Vec<_>>()}
+                                    </select>
+                                </div>
+                            </div>
+
+                            // 🎈 步驟五：設定未來通膨率（折現用）
+                            // 通膨只套用於未來，計算未來名目財富的今日等值購買力
+                            <div class="control-group">
+                                <label class="control-label">"🎈 五：設定未來通膨率"</label>
+                                <div class="select-wrapper">
+                                    <select class="control-select" on:change=move |ev| {
+                                        if let Ok(val) = event_target_value(&ev).parse::<usize>() { set_inflation_rate.set(val); }
+                                    }>
+                                        {move || (0..=6).map(|r| {
+                                            let label = if r == 0 {
+                                                "🚫 不考慮通膨 (0%)".to_string()
+                                            } else {
+                                                format!("📉 通膨率：{}%/年", r)
+                                            };
+                                            view! { <option value=r selected=move || inflation_rate.get() == r>{label}</option> }
                                         }).collect::<Vec<_>>()}
                                     </select>
                                 </div>
@@ -624,7 +831,28 @@ fn App() -> impl IntoView {
                 </Show>
             </div>
 
-            // 📊 圖表渲染容器 (最低高度會影響 hover)
+            // 📊 圖表標頭列：截圖按鈕放在圖表外部右側，不遮擋任何 Plotly 內容
+            <div class="chart-header">
+                <button
+                    class="screenshot-btn"
+                    title="下載圖表 PNG（1920×1080）"
+                    on:click=move |_| {
+                        #[cfg(target_family = "wasm")]
+                        {
+                            let _ = js_sys::eval(
+                                "Plotly.downloadImage(\
+                                    document.getElementById('financial-graph'),\
+                                    {format:'png',width:1920,height:1080,\
+                                     filename:'financial_simulator'}\
+                                )"
+                            );
+                        }
+                    }
+                >
+                    "📷 截圖"
+                </button>
+            </div>
+            // 📊 圖表渲染容器
             <div
                 id="financial-graph"
                 class="graph-container"
