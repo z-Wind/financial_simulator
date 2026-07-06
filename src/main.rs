@@ -93,7 +93,7 @@ pub fn make_short_clean_text_row(name_str: &str, val_str: &str, highlight: bool)
         "style='font-family:Consolas,monospace;'"
     };
 
-    format!("<span {style}>{name_str:<8} {val_str:>9}</span>")
+    format!("<span {style}>{name_str:<8} {val_str:>9}(折現)</span>")
 }
 
 // =====================================================================
@@ -676,13 +676,13 @@ fn App() -> impl IntoView {
             #[cfg(target_family = "wasm")]
             {
                 let element_id = "financial-graph";
-                if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
-                    if doc.get_element_by_id(element_id).is_some() {
-                        // 💡 關鍵修正：在外面直接把 p 解構或直接轉移給內部的 async 區塊
-                        leptos::task::spawn_local(async move {
-                            let _ = plotly::bindings::react(element_id, &p).await;
-                        });
-                    }
+                if let Some(doc) = web_sys::window().and_then(|w| w.document())
+                    && doc.get_element_by_id(element_id).is_some()
+                {
+                    // 💡 關鍵修正：在外面直接把 p 解構或直接轉移給內部的 async 區塊
+                    leptos::task::spawn_local(async move {
+                        let _ = plotly::bindings::react(element_id, &p).await;
+                    });
                 }
             }
 
@@ -724,9 +724,9 @@ fn App() -> impl IntoView {
                     <div class="controls-body">
                         <div class="controls-grid">
 
-                            // 🧿 步驟零：設定總模擬年數 (包含展開的 20-90 年清單)
+                            // 🧿 步驟一：設定總模擬年數 (包含展開的 20-90 年清單)
                             <div class="control-group">
-                                <label class="control-label">"🧿 零：設定總模擬年數"</label>
+                                <label class="control-label">"🧿 一：設定總模擬年數"</label>
                                 <div class="select-wrapper">
                                     <select class="control-select" on:change=move |ev| {
                                         if let Ok(val) = event_target_value(&ev).parse::<usize>() {
@@ -741,9 +741,9 @@ fn App() -> impl IntoView {
                                 </div>
                             </div>
 
-                            // 📆 步驟一：設定已投資年數
+                            // 📆 步驟二：設定已投資年數
                             <div class="control-group">
-                                <label class="control-label">"📆 一：設定已投資年數"</label>
+                                <label class="control-label">"📆 二：設定已投資年數"</label>
                                 <div class="select-wrapper">
                                     <select class="control-select" on:change=move |ev| {
                                         if let Ok(val) = event_target_value(&ev).parse::<usize>() {
@@ -758,9 +758,9 @@ fn App() -> impl IntoView {
                                 </div>
                             </div>
 
-                            // 🟢 步驟二：設定過去每月投入金額
+                            // 🟢 步驟三：設定過去每月投入金額
                             <div class="control-group">
-                                <label class="control-label">"🟢 二：設定過去每月投入金額"</label>
+                                <label class="control-label">"🟢 三：設定過去每月投入金額"</label>
                                 <div class="select-wrapper">
                                     <select class="control-select" on:change=move |ev| {
                                         if let Ok(val) = event_target_value(&ev).parse::<f64>() { set_h_inv.set(val); }
@@ -773,9 +773,9 @@ fn App() -> impl IntoView {
                                 </div>
                             </div>
 
-                            // 🎯 步驟三：目前資產錨定過去報酬
+                            // 🎯 步驟四：目前資產錨定過去報酬
                             <div class="control-group">
-                                <label class="control-label accent">"🎯 三：目前資產錨定過去報酬"</label>
+                                <label class="control-label accent">"🎯 四：目前資產錨定過去報酬"</label>
                                 <div class="select-wrapper">
                                     <select class="control-select" on:change=move |ev| {
                                         if let Ok(val) = event_target_value(&ev).parse::<usize>() { set_anchor_roi.set(val); }
@@ -788,9 +788,9 @@ fn App() -> impl IntoView {
                                 </div>
                             </div>
 
-                            // 🔵 步驟四：模擬未來每月改投金額
+                            // 🔵 步驟五：模擬未來每月改投金額
                             <div class="control-group">
-                                <label class="control-label">"🔵 四：模擬未來每月改投金額"</label>
+                                <label class="control-label">"🔵 五：模擬未來每月改投金額"</label>
                                 <div class="select-wrapper">
                                     <select class="control-select" on:change=move |ev| {
                                         if let Ok(val) = event_target_value(&ev).parse::<f64>() { set_f_inv.set(val); }
@@ -806,10 +806,10 @@ fn App() -> impl IntoView {
                                 </div>
                             </div>
 
-                            // 🎈 步驟五：設定未來通膨率（折現用）
+                            // 🎈 步驟六：設定未來通膨率（折現用）
                             // 通膨只套用於未來，計算未來名目財富的今日等值購買力
                             <div class="control-group">
-                                <label class="control-label">"🎈 五：設定未來通膨率"</label>
+                                <label class="control-label">"🎈 六：設定未來通膨率"</label>
                                 <div class="select-wrapper">
                                     <select class="control-select" on:change=move |ev| {
                                         if let Ok(val) = event_target_value(&ev).parse::<usize>() { set_inflation_rate.set(val); }
@@ -864,6 +864,14 @@ fn App() -> impl IntoView {
                     }
                 }
             ></div>
+            // 📋 戰略底部導覽註解（提供非專家的 universal 通俗化說明）
+            <div class="chart-footer-notes">
+                <p class="note-item">
+                    "💡 "
+                    <b>"導航小提示："</b>
+                    "名目金額代表未來實際看到的數字；折現（實質金額）則是扣除通膨率後，換算回「現在這一刻」的實質購買力。當您選擇提領時，系統會自動將提領金額隨通膨率調升，以保障您的實質生活水平。"
+                </p>
+            </div>
         </div>
     }
 }
@@ -878,4 +886,209 @@ fn main() {
 
     // 將 App 元件掛載至網頁 HTML 的 <body> 中
     leptos::prelude::mount_to_body(App);
+}
+
+// =====================================================================
+// # 7. 測試模組 - 第一部分：智慧型金融格式化單元測試
+// =====================================================================
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_with_commas_basic() {
+        // 測試純千分位逗號與精準度
+        assert_eq!(format_with_commas(1234.56, 1), "1,234.6");
+        assert_eq!(format_with_commas(1000000.0, 0), "1,000,000");
+        assert_eq!(format_with_commas(-500.55, 1), "-500.6");
+        assert_eq!(format_with_commas(0.0, 2), "0.00");
+    }
+
+    #[test]
+    fn test_twd_financial_under_ten_thousand() {
+        // 🎯 測試低於一萬的狀況：直接顯示千分位整數，不帶「萬」或「億」
+        assert_eq!(format_twd_financial(0.0), "0");
+        assert_eq!(format_twd_financial(150.0), "150");
+        assert_eq!(format_twd_financial(9999.0), "9,999");
+        assert_eq!(format_twd_financial(-8500.0), "-8,500");
+    }
+
+    #[test]
+    fn test_twd_financial_wan_level() {
+        // 🎯 測試萬級距 (1萬 ~ 9999萬) 且包含整除與不整除的細緻邏輯
+        assert_eq!(format_twd_financial(10000.0), "1萬");
+        assert_eq!(format_twd_financial(500000.0), "50萬");
+
+        // 測試整除微調 (例如 500.0 萬顯示 500 萬)
+        assert_eq!(format_twd_financial(5000000.0), "500萬");
+
+        // 測試小數點過渡 (例如 500.5 萬顯示 500.5 萬)
+        assert_eq!(format_twd_financial(5005000.0), "500.5萬");
+
+        // 測試極限邊界：只要不到一億，哪怕 9999.9 萬也老實呈現萬
+        assert_eq!(format_twd_financial(99999000.0), "9,999.9萬");
+        assert_eq!(format_twd_financial(-250000.0), "-25萬");
+    }
+
+    #[test]
+    fn test_twd_financial_yi_level() {
+        // 🎯 測試億級距邊界條件 (≥ 100,000,000)
+        assert_eq!(format_twd_financial(100000000.0), "1.0億");
+        assert_eq!(format_twd_financial(150000000.0), "1.5億");
+        assert_eq!(format_twd_financial(10005000000.0), "100.1億");
+        assert_eq!(format_twd_financial(-1200000000.0), "-12.0億");
+    }
+
+    #[test]
+    fn test_text_row_alignment() {
+        // 🎯 測試等寬對齊與 HTML 標籤注入的字串長度與結構
+        let normal_row = make_clean_text_row("ROI  5%", "500萬", "500萬", false);
+        assert!(normal_row.contains("style='font-family:Consolas,monospace;'"));
+        assert!(normal_row.contains("ROI  5%"));
+        // 由於沒有折現落差，不應該出現「折現：」字樣
+        assert!(!normal_row.contains("折現："));
+
+        let discount_row = make_clean_text_row("ROI 10%", "1,000萬", "800萬", false);
+        assert!(discount_row.contains("折現："));
+
+        let highlight_row = make_clean_text_row("ROI 10%", "1億", "1億", true);
+        assert!(highlight_row.contains("color:#F43F5E; font-weight:bold;"));
+    }
+
+    #[test]
+    fn test_short_text_row() {
+        let short_row = make_short_clean_text_row("ROI  5%", "350萬", true);
+        assert!(short_row.contains("color:#F43F5E; font-weight:bold;"));
+        assert!(short_row.contains("350萬"));
+    }
+
+    // =====================================================================
+    // # 8. 測試模組 - 第二部分：複利演算核心與時序連續性整合測試
+    // =====================================================================
+
+    #[test]
+    fn test_calculate_true_pivot_trends_basic_structure() {
+        let h_inv = 10000.0; // 歷史每月投入 1 萬
+        let f_inv = 20000.0; // 未來每月改投 2 萬
+        let anchor_roi = 10; // 主線年化 10%
+        let inflation_rate = 2; // 通膨 2%
+        let hist_years = 5;
+        let total_years = 15;
+
+        let trends = calculate_true_pivot_trends(
+            h_inv,
+            f_inv,
+            anchor_roi,
+            inflation_rate,
+            hist_years,
+            total_years,
+        );
+
+        // 🎯 1. 驗證雜湊表是否完整生成 0% 到 20% 的 21 條預測線
+        assert_eq!(trends.len(), 21);
+        for r in 0..=20 {
+            assert!(trends.contains_key(&r));
+        }
+
+        // 🎯 2. 驗證總時間序列長度 (15年 * 12個月 + 1個起始點 = 181)
+        let expected_months = total_years * 12 + 1;
+        assert_eq!(trends[&anchor_roi].len(), expected_months);
+    }
+
+    #[test]
+    fn test_historical_period_consistency() {
+        let h_inv = 30000.0;
+        let f_inv = 0.0;
+        let anchor_roi = 8;
+        let inflation_rate = 3;
+        let hist_years = 10;
+        let total_years = 30;
+
+        let trends = calculate_true_pivot_trends(
+            h_inv,
+            f_inv,
+            anchor_roi,
+            inflation_rate,
+            hist_years,
+            total_years,
+        );
+
+        let hist_months = hist_years * 12;
+
+        // 🎯 核心鐵律 1：在歷史期間（已發生），「名目資產」必定等於「實質資產」
+        #[allow(clippy::needless_range_loop)]
+        for m in 0..=hist_months {
+            let (nominal, real) = trends[&anchor_roi][m];
+            // 允許浮點數極微小的物理運算誤差
+            assert!(
+                (nominal - real).abs() < 1e-4,
+                "歷史期間名目與實質應完全相等"
+            );
+        }
+
+        // 🎯 核心鐵律 2：在歷史結算點以前，所有 21 條線路軌跡必須百分之百重合，消滅分叉！
+        #[allow(clippy::needless_range_loop)]
+        for m in 0..=hist_months {
+            let anchor_val = trends[&anchor_roi][m];
+            for r in 0..=20 {
+                let current_val = trends[&r][m];
+                assert!(
+                    (current_val.0 - anchor_val.0).abs() < 1e-4,
+                    "歷史期間所有 ROI 軌跡應重合"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_future_inflation_law() {
+        let h_inv = 10000.0;
+        let f_inv = -15000.0; // 模擬每月實質提領 1.5 萬
+        let anchor_roi = 6;
+        let inflation_rate = 2; // 通膨年化 2%
+        let hist_years = 0; // 全新起點，直接進入未來
+        let total_years = 20;
+
+        let trends = calculate_true_pivot_trends(
+            h_inv,
+            f_inv,
+            anchor_roi,
+            inflation_rate,
+            hist_years,
+            total_years,
+        );
+
+        let total_months = total_years * 12;
+        let inflation_monthly_rate = (1.0 + (inflation_rate as f64) / 100.0).powf(1.0 / 12.0) - 1.0;
+
+        // 🎯 金融鐵律：在未來期間任何一個時間點，名目金額必定等於 實質金額 * 累計通膨率
+        #[allow(clippy::needless_range_loop)]
+        for m in 1..=total_months {
+            let cumulative_inflation_factor = (1.0 + inflation_monthly_rate).powf(m as f64);
+
+            for r in 0..=20 {
+                let (nominal, real) = trends[&r][m];
+                if real.abs() > 0.001 {
+                    let calculated_nominal = real * cumulative_inflation_factor;
+                    let diff_ratio = (nominal - calculated_nominal).abs() / nominal.abs();
+                    assert!(
+                        diff_ratio < 1e-5,
+                        "未來區間必須嚴格遵循 名目 = 實質 * 累計通膨 的鐵律"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_zero_years_edge_case() {
+        // 🎯 測試極端邊界：若歷史年數為 0，歷史與未來衔接點（即第0個月）應正常初始化為 0
+        let trends = calculate_true_pivot_trends(20000.0, 20000.0, 10, 2, 0, 10);
+
+        for r in 0..=20 {
+            let (nominal_start, real_start) = trends[&r][0];
+            assert_eq!(nominal_start, 0.0);
+            assert_eq!(real_start, 0.0);
+        }
+    }
 }

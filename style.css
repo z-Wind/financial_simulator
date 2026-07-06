@@ -1,47 +1,44 @@
 /* =====================================================================
-   # 1. 全域設計變數與重設 (Design Tokens & CSS Reset)
+   # 1. DESIGN TOKENS & CSS RESET (全域設計變數與重設)
    ===================================================================== */
 :root {
-  /* 科技深色調背景：沉穩的深藍灰，與 Plotly 畫布底色完美隱形融合 */
+  /* Layout Colors (背景與區塊底色) */
   --bg-primary: #0F172A;
-  /* Slate 900 */
-  /* 控制面板與圖表容器的卡片背景色 */
+  /* Slate 900: 網頁大底色 */
   --bg-secondary: #1E293B;
-  /* Slate 800 */
-  /* 表單選單與輸入框的底色 */
+  /* Slate 800: 卡片與控制面板底色 */
   --bg-input: #334155;
-  /* Slate 700 */
+  /* Slate 700: 輸入框與選單底色 */
 
-  /* 線條與邊框顏色矩陣 */
+  /* Border Colors (邊框色矩陣) */
   --border-color: #475569;
-  /* Slate 600 */
+  /* Slate 600: 預設暗色邊框 */
   --border-color-hover: #64748B;
-  /* Slate 500 */
+  /* Slate 500: 懸停高亮邊框 */
 
-  /* 高階等寬金融字型與中文安全字型 */
-  --font-family: "Microsoft JhengHei", "PingFang TC", "Heiti TC", "Noto Sans TC", "Microsoft YaHei", sans-serif;
-
-  /* 狀態文字色彩 */
+  /* Text Colors (狀態文字) */
   --text-primary: #F8FAFC;
-  /* Slate 50 (極接近純白) */
+  /* Slate 50: 高對比接近純白 */
   --text-secondary: #CBD5E1;
-  /* Slate 300 (溫和內斂灰) */
+  /* Slate 300: 溫和內斂內文灰 */
 
-  /* 戰略主線核心視覺色 (玫瑰紅) */
+  /* Accent Colors (戰略核心視覺色) */
   --accent-red: #F43F5E;
-  /* Rose 500 */
-  /* 互動與膠囊高亮霓虹色 (藍綠色) */
+  /* Rose 500: 核心主線/警告色 */
   --accent-teal: #2DD4BF;
-  /* Teal 400 */
+  /* Teal 400: 互動/霓虹高亮色 */
+  --emerald: #10B981;
+  /* Emerald 500: 提示/安全翡翠綠 */
 
-  /* 全域動畫緩動曲線：打造高級流暢感的秘密 */
+  /* Typography & Animation (字型與動畫緩動) */
+  --font-family: "Microsoft JhengHei", "PingFang TC", "Heiti TC", "Noto Sans TC", "Microsoft YaHei", sans-serif;
   --transition-smooth: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 * {
   box-sizing: border-box;
-  /* 拔除行動裝置（iOS/Android）點擊元件時產生的原生藍色半透明高亮方塊 */
   -webkit-tap-highlight-color: transparent;
+  /* 移除行動裝置點擊時的原生藍色陰影 */
 }
 
 html,
@@ -49,47 +46,46 @@ body {
   margin: 0;
   padding: 0;
   background-color: var(--bg-primary);
-  /* 防止網頁在特定尺寸下出現微小的左右橫向滾動條 */
   overflow-x: hidden;
+  /* 防止窄螢幕元件溢出產生橫向滾動條 */
 }
 
 /* =====================================================================
-   # 2. 全域主容器配置 (App Framework)
+   # 2. APP FRAMEWORK (全域主容器佈局)
    ===================================================================== */
 .app-container {
-  background-color: var(--bg-primary);
-  /* 使用 clamp 讓留白隨螢幕縮放：手機端 12px，平板端自動過渡，桌機最寬留白 20px */
-  padding: clamp(12px, 3vw, 20px);
-  font-family: var(--font-family);
   min-height: 100vh;
+  padding: clamp(12px, 3vw, 20px);
+  /* 隨螢幕大小自適應留白 */
+  background-color: var(--bg-primary);
   color: var(--text-primary);
+  font-family: var(--font-family);
 }
 
-/* 導航模擬器主標題 */
 .app-title {
-  text-align: center;
-  margin: 0 0 16px;
-  color: var(--text-primary);
-  font-weight: bold;
-  /* 字級動態縮放：確保在 320px 手機到 4K 螢幕都不會突兀折行或過小 */
-  font-size: clamp(1.05rem, 2.4vw + 0.4rem, 1.5rem);
-  line-height: 1.45;
+  margin: 0 0 16px 0;
   padding: 0 4px;
+  color: var(--text-primary);
+  font-size: clamp(1.05rem, 2.4vw + 0.4rem, 1.5rem);
+  /* 防止 RWD 折行爆版 */
+  font-weight: bold;
+  line-height: 1.45;
+  text-align: center;
 }
 
 /* =====================================================================
-   # 3. 科技感可收合控制面板 (Interactive Controls Panel)
+   # 3. INTERACTIVE CONTROLS PANEL (BEM 重構：科技感可收合控制面板)
    ===================================================================== */
 .controls-panel {
   margin-bottom: 16px;
+  background-color: rgba(30, 41, 59, 0.4);
+  /* 半透明毛玻璃質感 */
   border: 1px solid var(--border-color);
   border-radius: 10px;
-  /* 採用極低透明度的 Slate 藍灰，呈現微微透出網頁底色的毛玻璃半透明質感 */
-  background-color: rgba(30, 41, 59, 0.4);
   overflow: hidden;
 }
 
-/* 標題列兼收合按鈕：徹底重設清除原生 <button> 的外觀，使其偽裝成一條平滑的導航橫條 */
+/* 面板標題列 (偽裝成平滑按鈕) */
 .controls-summary {
   display: flex;
   align-items: center;
@@ -100,90 +96,84 @@ body {
   background: none;
   border: none;
   border-radius: 0;
-  cursor: pointer;
+  color: var(--text-primary);
   font-family: var(--font-family);
+  cursor: pointer;
   user-select: none;
   transition: var(--transition-smooth);
 }
 
-/* 當滑鼠懸停在標題列上時，給予非常內斂的輕微亮底色提示 */
 .controls-summary:hover {
   background-color: rgba(255, 255, 255, 0.02);
 }
 
-.summary-title {
-  font-weight: bold;
+.controls-title {
   font-size: 0.95rem;
-  color: var(--text-primary);
+  font-weight: bold;
   letter-spacing: 0.5px;
 }
 
-/* 🎯 升級：高級科技感膠囊狀態標籤 (Capsule Status Badge) */
+/* 高級科技感膠囊狀態標籤 (Capsule Badge) */
 .panel-status-badge {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   padding: 6px 14px;
-  border-radius: 20px;
-  /* 預設收合狀態：溫和低調的灰色框線與灰字 */
-  border: 1px solid var(--border-color);
-  color: var(--text-secondary);
   background-color: rgba(30, 41, 59, 0.6);
+  border: 1px solid var(--border-color);
+  border-radius: 20px;
+  color: var(--text-secondary);
   font-size: 0.8rem;
   font-weight: 600;
   letter-spacing: 0.5px;
   transition: var(--transition-smooth);
 }
 
-/* 膠囊內的微小箭頭符號 */
 .panel-status-badge .badge-arrow {
   display: inline-block;
   font-size: 0.85em;
-  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-  /* 物理微調：解決中文字體與純文字箭頭縱向不對齊的視覺痛點 */
   transform: translateY(0.5px);
+  /* 物理修正中文字型與文字箭頭的不對齊痛點 */
+  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-/* 💡 當 Leptos 切換狀態為「展開」時 (加上 .badge-open class) */
+/* 狀態 Modifier: 當 Leptos 切換面板為「展開」時 (.badge-open) */
 .panel-status-badge.badge-open {
-  border-color: rgba(45, 212, 191, 0.4);
-  /* 亮藍綠色半透明框 */
-  color: var(--accent-teal);
-  /* 轉為顯眼的霓虹藍綠字 */
   background-color: rgba(45, 212, 191, 0.06);
+  border-color: rgba(45, 212, 191, 0.4);
+  color: var(--accent-teal);
   box-shadow: 0 0 10px rgba(45, 212, 191, 0.05);
 }
 
-/* 展開狀態下，箭頭流暢倒轉 180 度變成朝上 (▲) */
 .panel-status-badge.badge-open .badge-arrow {
   transform: rotate(180deg) translateY(-0.5px);
+  /* 箭頭順暢倒轉朝上 */
 }
 
-/* 🚀 頂級 Hover 特效：當滑鼠滑入整條橫列時，右側按鈕瞬間全反白高亮，點擊暗示極強 */
+/* 標題列整體 Hover 連動反應 */
 .controls-summary:hover .panel-status-badge {
-  border-color: var(--accent-teal);
   background-color: var(--accent-teal);
+  border-color: var(--accent-teal);
   color: var(--bg-primary);
-  /* 字體變成極深藍灰色，形成強烈對比 */
+  /* 強烈反色對比，點擊暗示極強 */
   box-shadow: 0 0 12px rgba(45, 212, 191, 0.3);
 }
 
-/* 手機點擊或滑鼠按下的物理下沉回饋 */
 .controls-summary:active .panel-status-badge {
   transform: scale(0.96);
+  /* 按下時的物理下沉回饋 */
 }
 
-/* 控制面板內部盛裝網格的身體區塊 */
 .controls-body {
   padding: 4px 16px 16px;
 }
 
 /* =====================================================================
-   # 4. 控制列表單網格 (RWD Forms Grid Layout)
+   # 4. RWD FORMS GRID & INPUTS (表單網格與智慧型對齊組件)
    ===================================================================== */
 .controls-grid {
   display: grid;
-  /* 智慧型 auto-fit 功能：桌機端最多並排 6 欄，隨著螢幕變窄會自動平滑拆行與流動 */
+  /* 智慧型自適應：桌機端並排，隨螢幕變窄自動平滑拆行與流動 */
   grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
   gap: 14px;
   width: 100%;
@@ -191,26 +181,24 @@ body {
 
 .control-group {
   min-width: 0;
-  /* 防止中文長字串撐開 Grid 導致爆版 */
+  /* 防禦機制：防止中文長字串撐開 Grid 導致破版 */
 }
 
-/* 控制欄位的中文標籤描述 */
 .control-label {
   display: block;
-  /* 💡 靈魂設計：強制設定固定 2 行的最小高度。
-     這能確保不論中文內容因折行變成 1 行還是 2 行，下方的下拉選單
-     永遠都會對齊在同一條完美的水平線上，視覺上極度舒適。 */
+  /* 💡 核心設計：強制設定固定 2 行的最小高度。
+     確保不論文字因折行變成 1 行或 2 行，下方的下拉選單永遠維持完美的水平對齊線。 */
   min-height: 2.6em;
   margin-bottom: 8px;
+  padding-top: 4px;
   color: var(--text-secondary);
-  font-weight: bold;
   font-size: 0.875rem;
+  font-weight: bold;
   line-height: 1.3;
   white-space: normal;
-  padding-top: 4px;
 }
 
-/* 步驟三的對照過去資產：特別亮起玫瑰紅，引導使用者將此處視為核心起點 */
+/* 核心起點或特殊強調標籤 */
 .control-label.accent {
   color: var(--accent-red);
 }
@@ -223,23 +211,23 @@ body {
 .control-select {
   width: 100%;
   min-height: 44px;
-  /* 對齊現代行動裝置 44px 的黃金舒適手指點擊熱區 */
+  /* 符合現代行動裝置 44px 的黃金手指點擊熱區 */
   padding: 10px 40px 10px 12px;
-  border-radius: 6px;
   background-color: var(--bg-secondary);
-  color: var(--text-primary);
-  border: 1px solid var(--border-color);
-  font-size: 14px;
-  font-family: var(--font-family);
-  cursor: pointer;
-  /* 拔除各家瀏覽器的原生醜陋下拉選單箭頭，改用客製化向量 SVG 圖檔 */
-  appearance: none;
-  -webkit-appearance: none;
-  -moz-appearance: none;
   background-image: url('data:image/svg+xml;charset=US-ASCII,<svg xmlns="http://w3.org" width="292.4" height="292.4" fill="%23CBD5E1"><path d="M287 69.4a17.6 17.6 0 0 0-13-5.4H18.4c-5 0-9.3 1.8-12.9 5.4A17.6 17.6 0 0 0 0 82.2c0 5 1.8 9.3 5.4 12.9l128 127.9c3.6 3.6 7.8 5.4 12.8 5.4s9.2-1.8 12.8-5.4L287 95c3.5-3.5 5.4-7.8 5.4-12.8 0-5-1.9-9.2-5.5-12.8z"/></svg>');
   background-repeat: no-repeat;
   background-position: right 12px top 50%;
   background-size: 12px auto;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 0.8rem;
+  font-family: var(--font-family);
+  cursor: pointer;
+  /* 拔除各家瀏覽器的原生預設箭頭，改用上方客製化向量 SVG */
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
@@ -247,21 +235,20 @@ body {
   border-color: var(--border-color-hover);
 }
 
-/* 鍵盤 Focus 或點擊選單時的發光效果 */
+/* 鍵盤 Focus 或點擊選單時的戰略發光效果 */
 .control-select:focus-visible {
-  outline: none;
   border-color: var(--accent-red);
   box-shadow: 0 0 0 3px rgba(244, 63, 94, 0.25);
+  outline: none;
 }
 
 /* =====================================================================
-   # 5. 圖表區域：標頭列 + 圖表容器 (Graph Header & Container)
+   # 5. GRAPH COMPONENTS (圖表外圍組件與底部提示)
    ===================================================================== */
-
-/* 截圖按鈕列：圖表上方右對齊，完全不進入 Plotly 渲染區域 */
 .chart-header {
   display: flex;
   justify-content: flex-end;
+  /* 右對齊，將按鈕排在 Plotly 畫布外部 */
   margin-bottom: 4px;
 }
 
@@ -269,11 +256,11 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  padding: 5px 12px;
   background: rgba(30, 41, 59, 0.88);
   border: 1px solid var(--border-color);
   border-radius: 6px;
   color: var(--text-secondary);
-  padding: 5px 12px;
   font-size: 0.82rem;
   font-family: var(--font-family);
   line-height: 1;
@@ -299,11 +286,37 @@ body {
   overflow: hidden;
 }
 
+/* 戰略底部導覽註解卡片 */
+.chart-footer-notes {
+  padding: 1.15rem 1.4rem;
+  background: linear-gradient(135deg, rgba(45, 212, 191, 0.06) 0%, rgba(15, 23, 42, 0.4) 100%);
+  border: 1px solid rgba(45, 212, 191, 0.05);
+  border-left: 4px solid var(--emerald);
+  /* 用翡翠綠左邊框引導視覺焦點 */
+  border-top: 1px solid rgba(45, 212, 191, 0.1);
+  border-radius: 4px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+}
+
+.note-item {
+  margin: 0;
+  color: #CBD5E1;
+  font-size: 0.8rem;
+  letter-spacing: 0.4px;
+  line-height: 1.65;
+}
+
+.note-item b {
+  color: var(--emerald);
+  /* 高亮「導航小提示：」 */
+  font-weight: 600;
+}
+
 /* =====================================================================
-   # 6. 行動裝置與窄螢幕斷點最佳化 (Mobile & Landscape RWD)
+   # 6. RWD RESPONSIVE BREAKPOINTS (行動裝置與手機橫放極限優化)
    ===================================================================== */
 
-/* 📱 手機直向斷點 (螢幕寬度 ≤ 640px) */
+/* 📱 手機直向模式 (螢幕寬度 ≤ 640px) */
 @media (max-width: 640px) {
   .app-title {
     margin-bottom: 12px;
@@ -327,34 +340,35 @@ body {
   }
 
   .control-label {
-    font-size: 0.8rem;
+    font-size: 0.88rem;
     margin-bottom: 6px;
   }
 
   .control-select {
-    font-size: 13px;
     padding: 9px 34px 9px 10px;
+    font-size: 0.875rem;
   }
 }
 
-/* 🚨 極窄直向老舊手機 (螢幕寬度 ≤ 400px)：直接全面強制改為單欄堆疊，防止文字選單被擠壓變形 */
+/* 🚨 老舊小螢幕手機 (螢幕寬度 ≤ 400px) */
 @media (max-width: 400px) {
   .controls-grid {
     grid-template-columns: 1fr;
+    /* 全面強制改為單欄垂直堆疊，防止文字與下拉框變形 */
   }
 }
 
-/* 🔄 手機/平板橫放模式 (螢幕高度 ≤ 480px，Landscape) 
-   此時「垂直高度」是全網頁最珍貴的稀缺資源：必須全面壓縮間距與字級，
-   讓參數設定列盡量只佔用 1 到 2 行，收合後圖表能吃滿高達 80% 的大視野畫面！ */
+/* 🔄 行動裝置橫放模式 (螢幕高度 ≤ 480px，Landscape)
+   垂直高度極度珍貴：全面壓縮所有外距與元件尺寸，讓參數設定列高度最小化，
+   使收合後的 Plotly 大圖表能吃滿高達 80% 以上的垂直可視範圍！ */
 @media (max-height: 480px) and (orientation: landscape) {
   .app-container {
     padding: 8px 16px;
   }
 
   .app-title {
+    margin: 0 0 8px 0;
     font-size: 0.95rem;
-    margin: 0 0 8px;
   }
 
   .controls-panel {
@@ -370,21 +384,21 @@ body {
     padding: 2px 14px 10px;
   }
 
-  /* 橫放時將欄位最小寬度縮小到 150px，強迫 5 個選單格子在橫向畫面中並排擠在同一列 */
   .controls-grid {
+    /* 橫放時縮減單欄最小寬度至 150px，強迫多個選單格子在橫向畫面中盡量並排擠在同一列 */
     grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
     gap: 8px;
   }
 
   .control-label {
-    font-size: 0.72rem;
+    font-size: 0.7rem;
     min-height: 2.2em;
     margin-bottom: 4px;
   }
 
   .control-select {
     min-height: 36px;
-    font-size: 12px;
     padding: 7px 30px 7px 9px;
+    font-size: 0.68rem;
   }
 }
