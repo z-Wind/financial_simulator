@@ -1243,9 +1243,8 @@ fn App() -> impl IntoView {
                                     } else {
                                         match roi_pct() {
                                             None => view! { <div class="input-hint warning">"⚠️ 無法推估，請確認數字"</div> }.into_any(),
-                                            Some(r) if r < -10.0 => view! { <div class="input-hint warning">{format!("⚠️ 隱含 {:.2}%/年，嚴重虧損，請確認", r)}</div> }.into_any(),
-                                            Some(r) if r < 0.0 => view! { <div class="input-hint warning">{format!("⚠️ 隱含 {:.2}%/年，目前虧損中", r)}</div> }.into_any(),
-                                            Some(r) if r > 25.0 => view! { <div class="input-hint warning">{format!("⚠️ 隱含 {:.2}%/年，請再確認是否正確", r)}</div> }.into_any(),
+                                            Some(r) if !(-25.0..=25.0).contains(&r) => view! { <div class="input-hint warning">{format!("🚨 隱含 {:.2}%/年，請確認", r)}</div> }.into_any(),
+                                            Some(r) if r < 0.0 => view! { <div class="input-hint warning">{format!("⚠️ 隱含 {:.2}%/年，虧損中", r)}</div> }.into_any(),
                                             Some(r) => view! { <div class="input-hint info">{format!("≈ 年化 {:.2}%", r)}</div> }.into_any(),
                                         }
                                     }
