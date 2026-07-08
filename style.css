@@ -242,6 +242,149 @@ body {
   outline: none;
 }
 
+
+/* =====================================================================
+   # 4.5. 新 UI 元件：摘要卡、數字輸入、提示、Toggle
+   ===================================================================== */
+
+/* 情境摘要卡片 */
+.summary-card {
+  background: rgba(45, 212, 191, 0.05);
+  border: 1px solid rgba(45, 212, 191, 0.18);
+  border-radius: 8px;
+  padding: 10px 16px;
+  margin-bottom: 12px;
+  line-height: 1.6;
+}
+
+.summary-text {
+  font-size: 0.88rem;
+  color: var(--text-secondary);
+}
+
+.summary-text strong {
+  color: var(--text-primary);
+}
+
+.summary-highlight {
+  color: var(--accent-teal) !important;
+}
+
+/* 數字輸入框 */
+.number-input {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background-color: var(--bg-secondary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  font-size: 14px;
+  font-family: var(--font-family);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+.number-input::-webkit-outer-spin-button,
+.number-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.number-input:hover {
+  border-color: var(--border-color-hover);
+}
+
+.number-input:focus {
+  outline: none;
+  border-color: var(--accent-red);
+  box-shadow: 0 0 0 3px rgba(244, 63, 94, 0.25);
+}
+
+.number-input:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* 輸入提示文字 */
+.input-hint {
+  margin-top: 5px;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  min-height: 1.2em;
+  line-height: 1.4;
+}
+
+.input-hint.warning {
+  color: #fb923c;
+}
+
+.input-hint.info {
+  color: var(--accent-teal);
+}
+
+/* 未來計畫 Toggle 按鈕組 */
+.toggle-group {
+  display: flex;
+  gap: 6px;
+}
+
+.toggle-btn {
+  flex: 1;
+  min-height: 38px;
+  padding: 8px 4px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-family: var(--font-family);
+  cursor: pointer;
+  transition: var(--transition-smooth);
+  white-space: nowrap;
+}
+
+.toggle-btn:hover {
+  border-color: var(--border-color-hover);
+  color: var(--text-primary);
+}
+
+.toggle-btn.active.stop {
+  border-color: rgba(148, 163, 184, 0.5);
+  background: rgba(148, 163, 184, 0.1);
+  color: #94a3b8;
+}
+
+.toggle-btn.active.invest {
+  border-color: rgba(45, 212, 191, 0.5);
+  background: rgba(45, 212, 191, 0.1);
+  color: var(--accent-teal);
+}
+
+.toggle-btn.active.withdraw {
+  border-color: rgba(244, 63, 94, 0.5);
+  background: rgba(244, 63, 94, 0.1);
+  color: var(--accent-red);
+}
+
+.toggle-amount {
+  margin-top: 8px;
+}
+
+/* 未來計畫 Row：toggle(2x 寬) + 通膨率(1x) */
+.controls-grid-future {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 14px;
+  width: 100%;
+  margin-top: 14px;
+}
+
+.control-group-wide {
+  min-width: 0;
+}
+
 /* =====================================================================
    # 5. GRAPH COMPONENTS (圖表外圍組件與底部提示)
    ===================================================================== */
@@ -348,13 +491,38 @@ body {
     padding: 9px 34px 9px 10px;
     font-size: 0.875rem;
   }
+
+  .controls-grid-future {
+    grid-template-columns: 1fr !important;
+    /* 寬度不足時，讓未來計畫與通膨率改為滑順的上下排版 */
+    gap: 12px;
+    /* 給予元件之間健康的呼吸空間 */
+  }
+
+  .toggle-group {
+    display: flex;
+    gap: 4px;
+    /* 稍微縮小按鈕間距 */
+  }
+
+  .toggle-btn {
+    min-height: 40px;
+    /* 維持黃金手指點擊熱區 */
+    padding: 8px 2px;
+    font-size: 11px;
+    /* 稍微降低字體，確保「🛑 停止投入」等字樣能在一行內完美呈現，不產生突兀折行 */
+    letter-spacing: 0px;
+  }
 }
 
 /* 🚨 老舊小螢幕手機 (螢幕寬度 ≤ 400px) */
 @media (max-width: 400px) {
   .controls-grid {
     grid-template-columns: 1fr;
-    /* 全面強制改為單欄垂直堆疊，防止文字與下拉框變形 */
+  }
+
+  .controls-grid-future {
+    grid-template-columns: 1fr;
   }
 }
 
