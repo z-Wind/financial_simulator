@@ -192,11 +192,6 @@ body {
   white-space: normal;
 }
 
-/* 核心起點或特殊強調標籤 */
-.control-label.accent {
-  color: var(--accent-red);
-}
-
 .select-wrapper {
   position: relative;
 }

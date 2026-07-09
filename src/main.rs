@@ -29,11 +29,21 @@ struct ChartInput {
     total_years: usize,
     hist_years: usize,
     h_inv: f64,
-    anchor_roi_pct: f64,
+    anchor_roi_pct: Option<f64>,
     lump_sum: f64,
     f_inv: f64,
     inflation_rate: usize,
     window_width: u32,
+}
+
+impl ChartInput {
+    fn anchor_roi_pct(&self) -> f64 {
+        self.anchor_roi_pct.unwrap_or(7.0)
+    }
+
+    fn h_inv_sum(&self) -> f64 {
+        self.h_inv * (self.hist_years * 12) as f64
+    }
 }
 
 thread_local! {
@@ -307,7 +317,7 @@ fn get_annotations(
     trends: &[TrendRoute],
     start_age: usize,
     hist_years: usize,
-    anchor_roi_pct: f64,
+    anchor_roi_pct: Option<f64>,
     lump_sum: f64,
 ) -> Vec<Annotation> {
     let mut ann_list = Vec::new();
@@ -327,14 +337,21 @@ fn get_annotations(
     // 🎯 核心防禦：將 X 軸標籤定位點從「相對年期」平移為「真實年齡」
     // Y 軸因為是對數軸 (Log Scale)，其定位數值必須做安全防護，避免負數或零引發 log10() 出錯
     let (x_pos, y_val_log, text_str, show_arrow, ax, ay) = if hist_years > 0 {
-        (
-            (start_age + hist_years) as f64,
-            amt_now.abs().max(10000.0).log10(), // 防禦負數與 0 的 log10 爆炸
+        let label_text = if let Some(actual_roi) = anchor_roi_pct {
             format!(
                 "📍 現況錨定 ({:.2}%): {}",
-                anchor_roi_pct,
+                actual_roi,
                 format_twd_financial(amt_now)
-            ),
+            )
+        } else {
+            // 🎯 若為 None，直接拔除百分比括號，老老實實回歸資產數字，視覺上極度嚴謹
+            format!("📍 現況結算: {}", format_twd_financial(amt_now))
+        };
+
+        (
+            (start_age + hist_years) as f64,
+            amt_now.max(10000.0).log10(), // 強制限低防禦對數軸爆炸
+            label_text,
             true,
             0.0,
             60.0,
@@ -429,8 +446,13 @@ fn generate_plot(ci: ChartInput, sorted_trends: Vec<TrendRoute>) -> Plot {
         if m <= hist_months {
             if let Some(anchor_route) = sorted_trends.iter().find(|r| r.is_anchor) {
                 let amt = anchor_route.data[m];
+                let label = if let Some(roi_val) = ci.anchor_roi_pct {
+                    format!("ROI {:.4}%", format!("{:.2}", roi_val))
+                } else {
+                    "ROI ----%".to_string()
+                };
                 lines.push(make_clean_text_row(
-                    &format!("ROI {:.4}%", format!("{:.2}", ci.anchor_roi_pct)),
+                    &label,
                     &format_twd_financial(amt.0),
                     &format_twd_financial(amt.1),
                     false,
@@ -445,7 +467,7 @@ fn generate_plot(ci: ChartInput, sorted_trends: Vec<TrendRoute>) -> Plot {
 
                 if route.is_anchor || is_integer {
                     let label = if route.is_anchor {
-                        format!("ROI {:.4}%", format!("{:.2}", ci.anchor_roi_pct))
+                        format!("ROI {:.4}%", format!("{:.2}", ci.anchor_roi_pct()))
                     } else {
                         format!("ROI {:4}%", route.roi_pct as usize)
                     };
@@ -477,13 +499,13 @@ fn generate_plot(ci: ChartInput, sorted_trends: Vec<TrendRoute>) -> Plot {
         let label = if is_narrow {
             if route.is_anchor {
                 // 先鎖定兩位，再強迫格式化補滿固定寬度
-                format!("ROI {:.4}%", format!("{:.2}", ci.anchor_roi_pct))
+                format!("ROI {:.4}%", format!("{:.2}", ci.anchor_roi_pct()))
             } else {
                 format!("ROI {:4}%", route.roi_pct as usize)
             }
         } else if route.is_anchor {
             // 寬螢幕主線情境
-            format!("ROI {:.4}% 主線", format!("{:.2}", ci.anchor_roi_pct))
+            format!("ROI {:.4}% 主線", format!("{:.2}", ci.anchor_roi_pct()))
         } else {
             // 寬螢幕未來普通跡線情境
             format!("ROI {:4}% 未來", route.roi_pct as usize)
@@ -579,10 +601,17 @@ fn generate_plot(ci: ChartInput, sorted_trends: Vec<TrendRoute>) -> Plot {
             future_plan_text
         )
     } else {
+        let history_investment_text = if ci.hist_years > 0 {
+            format!(" 已投入 {}", format_twd_financial(ci.h_inv_sum()))
+        } else {
+            String::new()
+        };
+
         format!(
-            "<br><span style='font-size: 13px; color: #2DD4BF; letter-spacing: 0.5px;'>📊 戰略配置 ── 起始 {}歲 ({} /月) | 現況 {}歲 | 目標 {}歲 [{}] | 折現通膨 {}%/年</span>",
+            "<br><span style='font-size: 13px; color: #2DD4BF; letter-spacing: 0.5px;'>📊 戰略配置 ── 起始 {}歲 ({}/月{}) | 現況 {}歲 | 目標 {}歲 [{}] | 折現通膨 {}%/年</span>",
             ci.start_age,
             format_twd_financial(ci.h_inv),
+            history_investment_text,
             ci.start_age + ci.hist_years,
             ci.start_age + ci.total_years,
             future_plan_text,
@@ -869,20 +898,38 @@ fn derive_future_summary(
         bankruptcy_text
     } else {
         let real_str = if ci.inflation_rate > 0 {
-            format!("，實質購買力約 {}", format_twd_financial(real))
+            format!(
+                "，實質購買力約 <strong>{}</strong>",
+                format_twd_financial(real)
+            )
         } else {
             String::new()
         };
-        format!("資產累積名目約 {}{}", format_twd_financial(nom), real_str)
+        format!(
+            "資產累積名目約 <strong>{}</strong>{}",
+            format_twd_financial(nom),
+            real_str
+        )
     };
 
     let av = asset_wan_val * 10_000.0;
     let roi_info = if av != 0.0 {
-        format!(
-            "，現有資產 {} (≈隱含年化 {:.2}%)",
-            format_twd_financial(av),
-            ci.anchor_roi_pct
-        )
+        if let Some(actual_roi) = ci.anchor_roi_pct {
+            let roi_style = if actual_roi < 0.0 {
+                "style='color: #F43F5E; font-weight: bold;'"
+            } else {
+                "style='color: #FFFFFF; font-weight: bold;'"
+            };
+
+            format!(
+                "，現有資產 <strong>{}</strong> (≈隱含年化 <span {}>{:.2}%</span>)",
+                format_twd_financial(av),
+                roi_style,
+                actual_roi
+            )
+        } else {
+            format!("，現有資產 <strong>{}</strong>", format_twd_financial(av))
+        }
     } else {
         String::new()
     };
@@ -947,11 +994,12 @@ fn App() -> impl IntoView {
     };
 
     let h_inv = move || h_inv_k.get() * 1000.0;
+    let h_inv_sum = move || h_inv() * (hist_years() * 12) as f64;
     let current_asset = move || asset_wan.get() * 10_000.0;
 
     let lump_sum = move || current_asset();
 
-    let roi_pct = move || {
+    let anchor_roi_pct = move || {
         let hm = hist_years() * 12;
         if hm == 0 || asset_wan.get() == 0.0 || current_age.get() < start_age.get() {
             None
@@ -959,7 +1007,7 @@ fn App() -> impl IntoView {
             infer_roi_pct(current_asset(), h_inv(), hm)
         }
     };
-    let anchor_roi_pct = move || roi_pct().unwrap_or(7.0);
+
     let f_inv = move || match future_mode.get() {
         FutureMode::Stop => 0.0,
         FutureMode::Invest => f_inv_k.get() * 1000.0,
@@ -1004,7 +1052,7 @@ fn App() -> impl IntoView {
         total_years: total_years(),
         hist_years: hist_years(),
         h_inv: h_inv(),
-        anchor_roi_pct: anchor_roi_pct().clamp(-99.0, 50.0),
+        anchor_roi_pct: anchor_roi_pct(),
         lump_sum: lump_sum(),
         f_inv: f_inv(),
         inflation_rate: inflation_rate.get(),
@@ -1053,7 +1101,7 @@ fn App() -> impl IntoView {
         calculate_true_pivot_trends(
             ci.h_inv,
             ci.f_inv,
-            ci.anchor_roi_pct,
+            ci.anchor_roi_pct(),
             ci.inflation_rate,
             ci.hist_years,
             ci.total_years,
@@ -1136,32 +1184,43 @@ fn App() -> impl IntoView {
                         &ci, &trends, asset_wan.get(), future_mode.get()
                     );
 
-                    let roi = ci.anchor_roi_pct;
+                    let roi = ci.anchor_roi_pct();
 
                     match (ci.hist_years, ci.lump_sum == 0.0) {
+                        // 情境 A：白手起家（無歷史、無起始本金 ── 隱含報酬率必為 None）
                         (0, true) => {
                             let intro = if sage == 0 { "👶 幫新生兒從 0 歲白手起家 — " } else { "📊 規劃從 " };
                             view! { <span class="summary-text">
                                 {intro} {if sage > 0 { format!("{} 歲出發 — ", sage) } else { "".to_string() }}
-                                {future_desc} "，預計年化報酬率 " {format!("{roi:.2}")} "% 在 "
+                                {future_desc} "，以系統基準預估年化回報 " <strong>{format!("{roi:.2}")} "%"</strong> " 在 "
                                 <strong>{tage}</strong> " 歲時，" <span inner_html=end_str />
                             </span> }.into_any()
                         },
+
+                        // 情境 B：單純單筆配置（無歷史、有起始本金 ── 隱含報酬率必為 None）
                         (0, false) => {
                             let intro = if sage == 0 { "👶 幫小孩從 0 歲配置 — " } else { "💰 規劃從 " };
-                            let ls_desc = format!("起始本金 {}", format_twd_financial(ci.lump_sum));
+                            let ls_desc = format!("起始本金 <strong>{}</strong>", format_twd_financial(ci.lump_sum));
                             view! { <span class="summary-text">
                                 {intro} {if sage > 0 { format!("{} 歲配置 — ", sage) } else { "".to_string() }}
-                                {ls_desc} "，" {future_desc} "，預計年化報酬率 " {format!("{roi:.2}")} "% 在 "
+                                <span inner_html=ls_desc /> "，" {future_desc} "，並以基準預估年化回報 " <strong>{format!("{roi:.2}")} "%"</strong> " 在 "
                                 <strong>{tage}</strong> " 歲時，" <span inner_html=end_str />
                             </span> }.into_any()
                         },
+
+                        // 情境 C：已有過去投資歷史（區分真實算出與 None 的歷史情境）
                         (_hist, _) => {
+                            let strategy_desc = if ci.anchor_roi_pct.is_some() {
+                                format!("。延續此回報率並調整戰略為：{future_desc}，期望在 ", )
+                            } else {
+                                format!("。目前無隱含報酬，調整戰略為：{future_desc}，並以基準預估年化回報 {roi:.2}% 期望在 ")
+                            };
+
                             view! { <span class="summary-text">
-                                "自 " <strong>{sage}</strong> " 歲起每月投資 " <strong>{format_twd_financial(ci.h_inv)}</strong>
-                                "，至今已投 " <strong>{ci.hist_years}</strong> " 年" {roi_info}
-                                "。調整戰略為：" {future_desc} "，期望在 "
-                                <strong>{tage}</strong> " 歲時，" <span inner_html=end_str />
+                                "自 " {sage} " 歲起每月投資 " {format_twd_financial(ci.h_inv)}
+                                " 共投入 " <strong>{format_twd_financial(ci.h_inv_sum())}</strong>
+                                "，至今已投 " {ci.hist_years} " 年" <span inner_html=roi_info />
+                                {strategy_desc} <strong>{tage}</strong> " 歲時，" <span inner_html=end_str />
                             </span> }.into_any()
                         }
                     }
@@ -1291,14 +1350,12 @@ fn App() -> impl IntoView {
                                             set_h_inv_k_raw.set(v.to_string());
                                         }
                                     />
-                                    <div class="input-hint">{move || format!("= {}", format_twd_financial(h_inv()))}</div>
+                                    <div class="input-hint">{move || format!("= {} 共投入 {}", format_twd_financial(h_inv()), format_twd_financial(h_inv_sum()))}</div>
                                 </div>
                             </Show>
                             // 5. 現有資產 / 起始資金（動態標籤，不允許負數）
                             <div class="control-group">
-                                <label class=move || {
-                                    if hist_years() > 0 { "control-label accent" } else { "control-label" }
-                                }>
+                                <label class="control-label">
                                     {move || if hist_years() > 0 {
                                         "🎯 五：現有資產（萬元）"
                                     } else {
@@ -1343,7 +1400,7 @@ fn App() -> impl IntoView {
                                             <div class="input-hint">"輸入資產以自動推估歷史報酬率"</div>
                                         }.into_any()
                                     } else {
-                                        match roi_pct() {
+                                        match anchor_roi_pct() {
                                             None => view! { <div class="input-hint warning">"⚠️ 無法推估，請確認數字"</div> }.into_any(),
                                             Some(r) if !(-25.0..=25.0).contains(&r) => view! { <div class="input-hint warning">{format!("🚨 隱含 {:.2}%/年，請確認", r)}</div> }.into_any(),
                                             Some(r) if r < 0.0 => view! { <div class="input-hint warning">{format!("⚠️ 隱含 {:.2}%/年，虧損中", r)}</div> }.into_any(),
@@ -1827,7 +1884,7 @@ mod tests {
             total_years: 10,
             hist_years: 2,
             h_inv: 12000.0,
-            anchor_roi_pct: 8.5,
+            anchor_roi_pct: Some(8.5),
             lump_sum: 2_000_000.0,
             f_inv: -8000.0,
             inflation_rate: 2,
@@ -1837,7 +1894,7 @@ mod tests {
         let trends = calculate_true_pivot_trends(
             ci.h_inv,
             ci.f_inv,
-            ci.anchor_roi_pct,
+            ci.anchor_roi_pct(),
             ci.inflation_rate,
             ci.hist_years,
             ci.total_years,
