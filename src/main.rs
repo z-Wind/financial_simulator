@@ -8,6 +8,7 @@ use plotly::layout::{
 use plotly::{Configuration, Plot, Scatter};
 use std::cell::Cell;
 use std::collections::HashMap;
+use std::rc::Rc;
 #[cfg(target_family = "wasm")]
 use wasm_bindgen::JsCast;
 
@@ -90,7 +91,16 @@ fn infer_roi_pct(current_asset: f64, h_inv: f64, hist_months: usize) -> Option<f
             hi = mid;
         }
     }
-    Some((lo + hi) / 2.0)
+
+    let final_roi = (lo + hi) / 2.0;
+
+    // 🎯 只要絕對值小於 0.005（四捨五入到第二位為 0.00），直接強行歸正為絕對正數 0.0
+    // 這能完美斬除 IEEE 754 殘留的微小負數符號零（-0.0%），一舉封印後端所有 UI 的疊字與負號瑕疵！
+    if final_roi.abs() < 0.005 {
+        Some(0.0)
+    } else {
+        Some(final_roi)
+    }
 }
 
 // =====================================================================
@@ -145,7 +155,7 @@ fn format_twd_financial(val: f64) -> String {
     }
     // 🎯 低於一萬，直接顯示千分位整數
     else {
-        format_with_commas(val, 0)
+        format!("{}元", format_with_commas(val, 0))
     }
 }
 
@@ -154,6 +164,8 @@ fn make_clean_text_row(
     val_str: &str,
     real_val_str: &str,
     highlight: bool,
+    is_inflation: bool,
+    is_narrow: bool,
 ) -> String {
     let style = if highlight {
         "style='font-family:Consolas,monospace; color:#F43F5E; font-weight:bold;'"
@@ -161,43 +173,50 @@ fn make_clean_text_row(
         "style='font-family:Consolas,monospace;'"
     };
 
-    if val_str == real_val_str {
-        format!("<span {style}>{name_str:<9} │ {val_str:>9}</span>")
+    let pad_w = 10;
+    if is_narrow {
+        format!("<span {style}>{name_str:<pad_w$} {real_val_str:>pad_w$}(折現)</span>")
     } else {
-        format!("<span {style}>{name_str:<9} │ {val_str:>9} │ 折現：{real_val_str:>9}</span>")
+        if is_inflation {
+            format!(
+                "<span {style}>{name_str:<pad_w$} │ {val_str:>pad_w$} │ 折現：{real_val_str:>pad_w$}</span>"
+            )
+        } else {
+            format!("<span {style}>{name_str:<pad_w$} │ {val_str:>pad_w$}</span>")
+        }
     }
-}
-
-fn make_short_clean_text_row(name_str: &str, val_str: &str, highlight: bool) -> String {
-    let style = if highlight {
-        "style='font-family:Consolas,monospace; color:#F43F5E; font-weight:bold;'"
-    } else {
-        "style='font-family:Consolas,monospace;'"
-    };
-
-    format!("<span {style}>{name_str:<9} {val_str:>9}(折現)</span>")
 }
 
 // =====================================================================
 // # 4. 真·雙階段獨立複利演算法（時序連續防禦版）
 // =====================================================================
+/// 代表單一條資產成長軌道
+#[derive(Debug, Clone, PartialEq)]
+struct TrendRoute {
+    /// 該條軌道所使用的精確年化報酬率 (例如 0.0, 5.4, 20.0)
+    roi_pct: f64,
+    /// 是否為使用者指定的主線錨定點
+    is_anchor: bool,
+    /// 軌道上每個月的名目與實質資產價值: Vec<(名目資產, 實質資產)>
+    data: Vec<(f64, f64)>,
+}
+
 fn calculate_true_pivot_trends(
     h_inv: f64,            // 歷史每月投入（元）
     f_inv: f64,            // 未來每月投入/提領（元）
-    anchor_roi_pct: f64,   // 直接傳入外面算好的「精確浮點數年化ROI」
+    anchor_roi_pct: f64,   // 外部傳入的精確浮點數年化 ROI
     inflation_rate: usize, // 未來通膨率
     hist_years: usize,     // 歷史年期
     total_years: usize,    // 總模擬年期
-    lump_sum: f64,         // 現有資產（元）
-) -> HashMap<usize, Vec<(f64, f64)>> {
+    lump_sum: f64,         // 現有資產結算點（元）
+) -> Vec<TrendRoute> {
     let hist_months = hist_years * 12;
     let total_months = total_years * 12;
     let future_months = total_months.saturating_sub(hist_months);
 
-    // 使用外面傳入的精確歷史年化報酬率，換算為月化複合利率
+    // 換算月化複合利率
     let anchor_monthly_rate = (1.0 + (anchor_roi_pct / 100.0)).powf(1.0 / 12.0) - 1.0;
     let inflation_monthly_rate = (1.0 + (inflation_rate as f64) / 100.0).powf(1.0 / 12.0) - 1.0;
-    let mut trends = HashMap::new();
 
     // ─── 1. 真實歷史區間動態模擬 ───
     let mut hist_route = Vec::with_capacity(hist_months + 1);
@@ -212,26 +231,41 @@ fn calculate_true_pivot_trends(
             hist_route.push((curr_balance, curr_balance));
         }
 
-        // 🎯 物理鎖定：不論浮點數再怎麼微幅抖動，歷史最後一格（現在結算點）強制等於使用者輸入的 200 萬！
+        // 🎯 物理鎖定：歷史最後一格強制等於現有資產
         if let Some(last_node) = hist_route.last_mut() {
             *last_node = (lump_sum, lump_sum);
         }
     }
 
-    // ─── 2. 未來 21 條軌道發散點火 (0% ~ 20%) ───
-    // 未來期的出發點，百分之百死死鎖定在歷史終點（也就是使用者填寫的 200 萬）上！
     let initial_asset = hist_route.last().map(|&(_, real)| real).unwrap_or(0.0);
 
-    for r in 0..=20 {
-        let monthly_rate = (1.0 + (r as f64) / 100.0).powf(1.0 / 12.0) - 1.0;
-        let mut full_route = hist_route.clone();
+    // ─── 2. 收集所有需要計算的年化報酬率 ───
+    // 使用 HashMap 除去重複值，避免當 anchor_roi_pct 剛好是整數時重複計算
+    let mut target_rois: HashMap<i32, f64> = (0..=20)
+        .map(|r| (r * 1000, r as f64)) // 放大 1000 倍作為 Key 規避浮點數 Hash 問題
+        .collect();
+
+    // 插入精確的主線 ROI (放大萬倍取整數作為唯一識別 Key，防止微幅抖動)
+    let anchor_key = (anchor_roi_pct * 1000.0).round() as i32;
+    target_rois.insert(anchor_key, anchor_roi_pct);
+
+    let mut routes = Vec::with_capacity(target_rois.len());
+
+    // ─── 3. 軌道發散點火模擬 ───
+    for (&_key, &roi) in target_rois.iter() {
+        let is_anchor = (roi - anchor_roi_pct).abs() < f64::EPSILON;
+        let monthly_rate = (1.0 + (roi / 100.0)).powf(1.0 / 12.0) - 1.0;
+
+        // 預先配置完整空間，避免 cloned 之後的 push 再次引發 Reallocation
+        let mut full_route = Vec::with_capacity(total_months + 1);
+        full_route.extend_from_slice(&hist_route);
+
         let mut curr_nominal = initial_asset;
         let mut future_inflation_factor = 1.0;
 
         for _ in 1..=future_months {
             future_inflation_factor *= 1.0 + inflation_monthly_rate;
 
-            // 名目現金流動態判定：投入不變、提領隨通膨調整
             let actual_nominal_cashflow = if f_inv >= 0.0 {
                 f_inv
             } else {
@@ -247,32 +281,55 @@ fn calculate_true_pivot_trends(
 
             full_route.push((curr_nominal, curr_real));
         }
-        trends.insert(r, full_route);
+
+        routes.push(TrendRoute {
+            roi_pct: roi,
+            is_anchor,
+            data: full_route,
+        });
     }
 
-    trends
+    // ─── 4. 嚴謹排序 ───
+    // 依據年化報酬率由小到大 (0% -> ... -> 20%) 排好，供後端繪圖直接按順序疊加
+    routes.sort_by(|a, b| {
+        a.roi_pct
+            .partial_cmp(&b.roi_pct)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    routes
 }
 
 // =====================================================================
 // # 5. 動態標籤產生模組（優化：X軸定位改用真實歲數坐標）
 // =====================================================================
 fn get_annotations(
-    trends: &HashMap<usize, Vec<(f64, f64)>>,
+    trends: &[TrendRoute],
     start_age: usize,
     hist_years: usize,
-    anchor_roi: usize,
     anchor_roi_pct: f64,
     lump_sum: f64,
 ) -> Vec<Annotation> {
     let mut ann_list = Vec::new();
     let hist_idx = hist_years * 12;
-    let amt_now = trends[&anchor_roi][hist_idx].0;
 
-    // 🎯 核心修正：將 X 軸標籤定位點從「相對年期」平移為「真實年齡」
+    let amt_now = if let Some(anchor_route) = trends.iter().find(|r| r.is_anchor) {
+        // 安全防護：確保索引不越界
+        if hist_idx < anchor_route.data.len() {
+            anchor_route.data[hist_idx].0
+        } else {
+            lump_sum
+        }
+    } else {
+        lump_sum
+    };
+
+    // 🎯 核心防禦：將 X 軸標籤定位點從「相對年期」平移為「真實年齡」
+    // Y 軸因為是對數軸 (Log Scale)，其定位數值必須做安全防護，避免負數或零引發 log10() 出錯
     let (x_pos, y_val_log, text_str, show_arrow, ax, ay) = if hist_years > 0 {
         (
             (start_age + hist_years) as f64,
-            amt_now.abs().max(10000.0).log10(),
+            amt_now.abs().max(10000.0).log10(), // 防禦負數與 0 的 log10 爆炸
             format!(
                 "📍 現況錨定 ({:.2}%): {}",
                 anchor_roi_pct,
@@ -322,58 +379,38 @@ fn get_annotations(
             .border_width(1.5)
             .border_pad(5.0),
     );
+
     ann_list
 }
 
 // =====================================================================
 // # 6. 全自動響應式圖表引擎（前半段：數據流與線條配置）
 // =====================================================================
-fn generate_plot(ci: ChartInput) -> Plot {
-    // 🎯 核心重構：直接解構 ChartInput 結構體，完美收合參數，消滅 Clippy 參數過多警告
-    let ChartInput {
-        start_age,
-        total_years,
-        hist_years,
-        h_inv,
-        anchor_roi_pct,
-        lump_sum,
-        f_inv,
-        inflation_rate,
-        window_width,
-    } = ci;
+fn generate_plot(ci: ChartInput, sorted_trends: Vec<TrendRoute>) -> Plot {
+    let is_narrow = ci.window_width < 640;
+    let is_inflation = ci.inflation_rate > 0;
+    let total_months = ci.total_years * 12;
+    let hist_months = ci.hist_years * 12;
 
-    let is_narrow = window_width < 640;
-    let anchor_roi = anchor_roi_pct.round().clamp(0.0, 20.0) as usize;
-
-    let trends = calculate_true_pivot_trends(
-        h_inv,
-        f_inv,
-        anchor_roi_pct,
-        inflation_rate,
-        hist_years,
-        total_years,
-        lump_sum,
-    );
-    let total_months = total_years * 12;
-    let hist_months = hist_years * 12;
-
-    // 將 X 軸數值由「相對年期數」直接換算成「真實歲數」
+    // 建立一組共用的 X 軸數值時間軸（真實歲數）
     let x_numeric_timeline: Vec<f64> = (0..=total_months)
-        .map(|m| start_age as f64 + (m as f64 / 12.0))
+        .map(|m| ci.start_age as f64 + (m as f64 / 12.0))
         .collect();
 
-    let mut colors = Vec::new();
+    let shared_x = Rc::new(x_numeric_timeline);
+
+    // 預先動態生成 0% 到 20% 基礎色階
+    let mut colors = Vec::with_capacity(21);
     for i in 0..=20 {
         colors.push(format!("rgba({}, {}, 255, 0.8)", 50 + i * 8, 80 + i * 5));
     }
 
-    let mut hover_labels_text = Vec::with_capacity(x_numeric_timeline.len());
-
-    #[allow(clippy::needless_range_loop)]
+    // 1. 組裝唯一的主線 Hover 提示文字
+    let mut hover_labels_text = Vec::with_capacity(shared_x.len());
     for m in 0..=total_months {
         let elapsed_years = m / 12;
         let mo = m % 12;
-        let current_calc_age = start_age + elapsed_years;
+        let current_calc_age = ci.start_age + elapsed_years;
 
         let time_header = if mo > 0 {
             format!(
@@ -390,28 +427,37 @@ fn generate_plot(ci: ChartInput) -> Plot {
         let mut lines = vec![time_header, "────────────────────────".to_string()];
 
         if m <= hist_months {
-            let amt = trends[&anchor_roi][m];
-            lines.push(make_clean_text_row(
-                &format!("ROI {:.4}%", anchor_roi_pct.to_string()),
-                &format_twd_financial(amt.0),
-                &format_twd_financial(amt.1),
-                false,
-            ));
-        } else {
-            for r in (0..=20).rev() {
-                let is_anchor = r == anchor_roi;
-                let amt = trends[&r][m];
-                let label = if is_anchor {
-                    format!("ROI {:.4}%", anchor_roi_pct.to_string())
-                } else {
-                    format!("ROI {:4}%", r)
-                };
+            if let Some(anchor_route) = sorted_trends.iter().find(|r| r.is_anchor) {
+                let amt = anchor_route.data[m];
                 lines.push(make_clean_text_row(
-                    &label,
+                    &format!("ROI {:.4}%", format!("{:.2}", ci.anchor_roi_pct)),
                     &format_twd_financial(amt.0),
                     &format_twd_financial(amt.1),
-                    is_anchor,
+                    false,
+                    is_inflation,
+                    is_narrow,
                 ));
+            }
+        } else {
+            for route in sorted_trends.iter().rev() {
+                let amt = route.data[m];
+                let is_integer = (route.roi_pct - route.roi_pct.round()).abs() < f64::EPSILON;
+
+                if route.is_anchor || is_integer {
+                    let label = if route.is_anchor {
+                        format!("ROI {:.4}%", format!("{:.2}", ci.anchor_roi_pct))
+                    } else {
+                        format!("ROI {:4}%", route.roi_pct as usize)
+                    };
+                    lines.push(make_clean_text_row(
+                        &label,
+                        &format_twd_financial(amt.0),
+                        &format_twd_financial(amt.1),
+                        route.is_anchor,
+                        is_inflation,
+                        is_narrow,
+                    ));
+                }
             }
         }
         hover_labels_text.push(lines.join("<br>"));
@@ -420,65 +466,63 @@ fn generate_plot(ci: ChartInput) -> Plot {
     let mut hover_labels_opt = Some(hover_labels_text);
     let mut plot = Plot::new();
 
-    for r in (0..=20).rev() {
-        let is_p = [5, 10, 15, 20].contains(&r) || r == anchor_roi;
-        let total_idx = total_years * 12;
-        let amt_future = trends[&r][total_idx];
+    // 2. 依序繪製所有跡線 (Traces)
+    for route in sorted_trends.iter().rev() {
+        let roi_floor = route.roi_pct.floor() as usize;
+        let is_integer = (route.roi_pct - route.roi_pct.round()).abs() < f64::EPSILON;
+        let is_p =
+            (is_integer && [5, 10, 15, 20].contains(&(route.roi_pct as usize))) || route.is_anchor;
+        let amt_future = route.data[total_months];
 
-        let legend_name = if is_narrow {
-            if r == anchor_roi {
-                make_short_clean_text_row(
-                    &format!("ROI {:.4}%", anchor_roi_pct.to_string()),
-                    &format_twd_financial(amt_future.1),
-                    true,
-                )
+        let label = if is_narrow {
+            if route.is_anchor {
+                // 先鎖定兩位，再強迫格式化補滿固定寬度
+                format!("ROI {:.4}%", format!("{:.2}", ci.anchor_roi_pct))
             } else {
-                make_short_clean_text_row(
-                    &format!("ROI {:4}%", r),
-                    &format_twd_financial(amt_future.1),
-                    false,
-                )
+                format!("ROI {:4}%", route.roi_pct as usize)
             }
-        } else if r == anchor_roi {
-            make_clean_text_row(
-                &format!("ROI {:.4}% 主線", format!("{anchor_roi_pct:.2}")),
-                &format_twd_financial(amt_future.0),
-                &format_twd_financial(amt_future.1),
-                true,
-            )
+        } else if route.is_anchor {
+            // 寬螢幕主線情境
+            format!("ROI {:.4}% 主線", format!("{:.2}", ci.anchor_roi_pct))
         } else {
-            make_clean_text_row(
-                &format!("ROI {:4}% 未來", r),
-                &format_twd_financial(amt_future.0),
-                &format_twd_financial(amt_future.1),
-                false,
-            )
+            // 寬螢幕未來普通跡線情境
+            format!("ROI {:4}% 未來", route.roi_pct as usize)
         };
 
-        let mut trace = Scatter::new(
-            x_numeric_timeline.clone(),
-            trends[&r].iter().map(|x| x.0).collect(),
-        )
-        .name(legend_name);
+        let legend_name = make_clean_text_row(
+            &label,
+            &format_twd_financial(amt_future.0),
+            &format_twd_financial(amt_future.1),
+            route.is_anchor,
+            is_inflation,
+            is_narrow,
+        );
 
-        let color = if r == anchor_roi {
+        let y_data: Vec<f64> = route.data.iter().map(|x| x.0).collect();
+        let mut trace = Scatter::new((*shared_x).clone(), y_data).name(legend_name);
+
+        let color = if route.is_anchor {
             "#F43F5E".to_string()
         } else {
-            colors[r].clone()
+            colors
+                .get(roi_floor)
+                .cloned()
+                .unwrap_or_else(|| "rgba(100,100,255,0.5)".to_string())
         };
-        let width = if r == anchor_roi {
-            3.5
+
+        let width = if route.is_anchor {
+            3.5 // 主線加粗，成為焦點
         } else if is_p {
-            2.0
+            2.0 // 重點提示線
         } else {
-            0.8
+            0.8 // 背景細線
         };
 
         trace = trace
             .line(Line::new().color(color).width(width))
             .show_legend(is_p);
 
-        if r == anchor_roi {
+        if route.is_anchor {
             if let Some(labels) = hover_labels_opt.take() {
                 trace = trace
                     .text_array(labels)
@@ -489,118 +533,116 @@ fn generate_plot(ci: ChartInput) -> Plot {
         }
         plot.add_trace(trace);
     }
-    if anchor_roi != 0 {
-        let amt_principal_future = trends[&0][total_years * 12];
-        let principal_name = if is_narrow {
-            make_short_clean_text_row(
-                "ROI    0%",
-                &format_twd_financial(amt_principal_future.1),
-                false,
-            )
-        } else {
-            make_clean_text_row(
-                "ROI    0% 本金",
-                &format_twd_financial(amt_principal_future.0),
-                &format_twd_financial(amt_principal_future.1),
-                false,
-            )
-        };
 
-        let principal_trace = Scatter::new(
-            x_numeric_timeline.clone(),
-            trends[&0].iter().map(|x| x.0).collect(),
-        )
-        .name(principal_name)
-        .line(Line::new().color("#A0AEC0").width(2.5).dash(DashType::Dash))
-        .show_legend(true)
-        .hover_info(HoverInfo::Skip);
+    // 3. 繪製 0% 本金對照虛線
+    if let Some(base_route) = sorted_trends
+        .iter()
+        .find(|r| !r.is_anchor && (r.roi_pct).abs() < f64::EPSILON)
+    {
+        let amt_principal_future = base_route.data[total_months];
+        let principal_name = make_clean_text_row(
+            if is_narrow {
+                "ROI    0%"
+            } else {
+                "ROI    0% 本金"
+            },
+            &format_twd_financial(amt_principal_future.0),
+            &format_twd_financial(amt_principal_future.1),
+            false,
+            is_inflation,
+            is_narrow,
+        );
+
+        let y_base: Vec<f64> = base_route.data.iter().map(|x| x.0).collect();
+        let principal_trace = Scatter::new((*shared_x).clone(), y_base)
+            .name(principal_name)
+            .line(Line::new().color("#A0AEC0").width(2.5).dash(DashType::Dash))
+            .show_legend(true)
+            .hover_info(HoverInfo::Skip);
 
         plot.add_trace(principal_trace);
     }
 
-    let future_plan_text = if f_inv > 0.0 {
-        format!("每月改投名目 {}", format_twd_financial(f_inv))
-    } else if f_inv < 0.0 {
-        format!("每月提領實質 {}", format_twd_financial(f_inv.abs()))
+    let future_plan_text = if ci.f_inv > 0.0 {
+        format!("每月改投名目 {}", format_twd_financial(ci.f_inv))
+    } else if ci.f_inv < 0.0 {
+        format!("每月提領實質 {}", format_twd_financial(ci.f_inv.abs()))
     } else {
         "不再投入(利滾利)".to_string()
     };
 
     let strategy_subtitle = if is_narrow {
         format!(
-            "<br><span style='font-size: 11px; color: #2DD4BF; font-weight: normal;'>\
-            起始 {}歲 | 現況 {}歲 | {}</span>",
-            start_age,
-            start_age + hist_years,
-            future_plan_text,
+            "<br><span style='font-size: 11px; color: #2DD4BF;'>起始 {}歲 | 現況 {}歲 | {}</span>",
+            ci.start_age,
+            ci.start_age + ci.hist_years,
+            future_plan_text
         )
     } else {
         format!(
-            "<br><span style='font-size: 13px; color: #2DD4BF; font-weight: normal; \
-            letter-spacing: 0.5px; line-height: 1.6;'>\
-            📊 戰略配置 ── 起始 {}歲 ({} /月) | 現況 {}歲 | 目標 {}歲 [{}] | 折現通膨 {}%/年</span>",
-            start_age,
-            format_twd_financial(h_inv),
-            start_age + hist_years,
-            start_age + total_years,
+            "<br><span style='font-size: 13px; color: #2DD4BF; letter-spacing: 0.5px;'>📊 戰略配置 ── 起始 {}歲 ({} /月) | 現況 {}歲 | 目標 {}歲 [{}] | 折現通膨 {}%/年</span>",
+            ci.start_age,
+            format_twd_financial(ci.h_inv),
+            ci.start_age + ci.hist_years,
+            ci.start_age + ci.total_years,
             future_plan_text,
-            inflation_rate,
+            ci.inflation_rate
         )
     };
 
     let anns = get_annotations(
-        &trends,
-        start_age,
-        hist_years,
-        anchor_roi,
-        anchor_roi_pct,
-        lump_sum,
+        &sorted_trends,
+        ci.start_age,
+        ci.hist_years,
+        ci.anchor_roi_pct,
+        ci.lump_sum,
     );
 
-    // 🎯 核心防禦：重新定義安全的刻度防禦機制
-    let f_years = total_years.saturating_sub(hist_years);
-    let (x_ticks, x_tick_text) = if hist_years > 0 && total_years >= hist_years {
+    // 4. 座標防禦刻度
+    let f_years = ci.total_years.saturating_sub(ci.hist_years);
+    let (x_ticks, x_tick_text) = if ci.hist_years > 0 && ci.total_years >= ci.hist_years {
         (
             vec![
-                start_age as f64,
-                (start_age + hist_years) as f64,
-                (start_age + total_years) as f64,
+                ci.start_age as f64,
+                (ci.start_age + ci.hist_years) as f64,
+                (ci.start_age + ci.total_years) as f64,
             ],
             vec![
-                format!("🎬 {} 歲 (起點)", start_age),
-                format!("📍 {} 歲 (現在結算)", start_age + hist_years),
-                format!("🏁 {} 歲 (未來終點)", start_age + total_years),
+                format!("🎬 {} 歲", ci.start_age),
+                format!("📍 {} 歲 (結算)", ci.start_age + ci.hist_years),
+                format!("🏁 {} 歲 (終點)", ci.start_age + ci.total_years),
             ],
         )
     } else {
         (
-            vec![start_age as f64, (start_age + total_years) as f64],
+            vec![ci.start_age as f64, (ci.start_age + ci.total_years) as f64],
             vec![
-                format!("🎯 {} 歲 (現在起點)", start_age),
-                format!("🏁 {} 歲 (未來終點)", start_age + total_years),
+                format!("🎯 {} 歲", ci.start_age),
+                format!("🏁 {} 歲 (終點)", ci.start_age + ci.total_years),
             ],
         )
     };
 
-    // 🎯 核心防禦：縱向分水嶺定位線也一併加上安全防護，避免除以零或時序顛倒
+    // 5. 縱向分水嶺定位線
     let mut shapes = Vec::new();
-    let x_positions = if hist_years > 0 && total_years >= hist_years {
+    let x_positions = if ci.hist_years > 0 && ci.total_years >= ci.hist_years {
         vec![
-            start_age as f64 + (hist_years as f64 / 2.0),
-            (start_age + hist_years) as f64,
-            (start_age + hist_years) as f64 + (f_years as f64 / 2.0),
-            (start_age + total_years) as f64,
+            ci.start_age as f64 + (ci.hist_years as f64 / 2.0),
+            (ci.start_age + ci.hist_years) as f64,
+            (ci.start_age + ci.hist_years) as f64 + (f_years as f64 / 2.0),
+            (ci.start_age + ci.total_years) as f64,
         ]
     } else {
         vec![
-            start_age as f64,
-            start_age as f64 + (total_years as f64 / 2.0),
-            (start_age + total_years) as f64,
+            ci.start_age as f64,
+            ci.start_age as f64 + (ci.total_years as f64 / 2.0),
+            (ci.start_age + ci.total_years) as f64,
         ]
     };
 
     for x_pos in x_positions {
-        let is_now = hist_years > 0 && x_pos == (start_age + hist_years) as f64;
+        let is_now = ci.hist_years > 0
+            && (x_pos - (ci.start_age + ci.hist_years) as f64).abs() < f64::EPSILON;
         let line_color = if is_now {
             "rgba(244,63,94,0.8)".to_string()
         } else {
@@ -613,23 +655,71 @@ fn generate_plot(ci: ChartInput) -> Plot {
             DashType::Dash
         };
 
-        let shape = Shape::new()
-            .shape_type(ShapeType::Line)
-            .x0(x_pos)
-            .x1(x_pos)
-            .y0(0.0)
-            .y1(1.0)
-            .y_ref("paper")
-            .line(
-                ShapeLine::new()
-                    .color(line_color)
-                    .width(line_width)
-                    .dash(dash_type),
-            )
-            .layer(ShapeLayer::Below);
-        shapes.push(shape);
+        shapes.push(
+            Shape::new()
+                .shape_type(ShapeType::Line)
+                .x0(x_pos)
+                .x1(x_pos)
+                .y0(0.0)
+                .y1(1.0)
+                .y_ref("paper")
+                .line(
+                    ShapeLine::new()
+                        .color(line_color)
+                        .width(line_width)
+                        .dash(dash_type),
+                )
+                .layer(ShapeLayer::Below),
+        );
     }
 
+    // 1. 物理視野下限死鎖在 1 萬元，徹底杜絕負數或趨零暴跌把對數軸向下無限扯塌！
+    let visual_floor: f64 = 10_000.0;
+    let y_min_log = visual_floor.log10(); // 順利通過編譯，精確得到 4.0
+
+    // 2. 掃描所有軌道中的最高點資產，決定動態頂部視野
+    let mut max_val = 100_000.0;
+    for route in sorted_trends.iter() {
+        for &(nominal, _) in route.data.iter() {
+            if nominal > max_val {
+                max_val = nominal;
+            }
+        }
+    }
+
+    // 3. 🎯 同步修正：對 1.5 倍的放大常數進行型別與 log10 安全處理
+    let y_max_log = if max_val > visual_floor {
+        (max_val * 1.5_f64).log10()
+    } else {
+        5.0 // 最大資產不到 10 萬時，預設給予 10 萬（5.0）的對數上限空間
+    };
+
+    // 4. 備妥所有可能橫跨的台灣標準純中文理財對數刻度關卡
+    let all_potential_ticks: Vec<(f64, &str)> = vec![
+        (10_000.0, "1萬"),
+        (100_000.0, "10萬"),
+        (1_000_000.0, "100萬"),
+        (10_000_000.0, "1,000萬"),
+        (100_000_000.0, "1億"),
+        (1_000_000_000.0, "10億"),
+        (10_000_000_000.0, "100億"),
+        (100_000_000_000.0, "1000億"),
+    ];
+
+    // 5. 過濾出「真正落在我們設定的動態物理視野範圍內」的中文刻度
+    let mut dynamic_y_vals = Vec::new();
+    let mut dynamic_y_text = Vec::new();
+
+    for (val, text) in all_potential_ticks {
+        let val_log = val.log10();
+        // 刻度打點起點嚴格卡在 1 萬（4.0），終點則不能超過當前的最大视野上限
+        if val_log >= y_min_log && val_log <= y_max_log + 0.3 {
+            dynamic_y_vals.push(val);
+            dynamic_y_text.push(text.to_string());
+        }
+    }
+
+    // ─── 6. 座標軸與圖例配置 ───
     let x_axis = Axis::new()
         .type_(AxisType::Linear)
         .tick_mode(TickMode::Array)
@@ -648,23 +738,15 @@ fn generate_plot(ci: ChartInput) -> Plot {
                 .font(Font::new().color("#F1F5F9").size(13)),
         )
         .type_(AxisType::Log)
+        .auto_range(false)
+        .range(vec![y_min_log, y_max_log])
+        .tick_mode(TickMode::Array)
+        .tick_values(dynamic_y_vals)
+        .tick_text(dynamic_y_text)
         .grid_color("#1E293B")
         .zero_line_color("#334155")
         .tick_font(Font::new().color("#CBD5E1").size(11))
-        .tick_values(vec![
-            10000.0,
-            100000.0,
-            1000000.0,
-            10000000.0,
-            100000000.0,
-            1000000000.0,
-            10000000000.0,
-        ])
-        .tick_text(vec![
-            "1萬", "10萬", "100萬", "1,000萬", "1億", "10億", "100億",
-        ])
-        .domain(&[0.05, 1.0])
-        .auto_range(true);
+        .domain(&[0.05, 1.0]);
 
     let legend = if is_narrow {
         Legend::new()
@@ -703,10 +785,7 @@ fn generate_plot(ci: ChartInput) -> Plot {
         );
 
     let title = Title::new()
-        .text(format!(
-            "<b>人生財務戰略導航模擬器</b>{}",
-            strategy_subtitle
-        ))
+        .text(format!("<b>人生財務戰航模擬器</b>{}", strategy_subtitle))
         .x(0.5)
         .y(0.96)
         .font(
@@ -736,45 +815,58 @@ fn generate_plot(ci: ChartInput) -> Plot {
             .responsive(true)
             .display_mode_bar(DisplayModeBar::False),
     );
+
     plot
 }
 
 // ─── 輔助函數：計算終值並生成狀態描述 ──────────────────────────────────
 fn derive_future_summary(
     ci: &ChartInput,
+    sorted_trends: &[TrendRoute],
     asset_wan_val: f64,
     future_mode_val: FutureMode,
 ) -> (String, String, String) {
-    // 1. 呼叫與圖表完全同源的複利演算法
-    let anchor_roi_idx = ci.anchor_roi_pct.round().clamp(0.0, 20.0) as usize;
-    let trends = calculate_true_pivot_trends(
-        ci.h_inv,
-        ci.f_inv,
-        ci.anchor_roi_pct,
-        ci.inflation_rate,
-        ci.hist_years,
-        ci.total_years,
-        ci.lump_sum,
-    );
+    // 精確定位主線軌道
+    let anchor_route = sorted_trends.iter().find(|route| route.is_anchor);
 
-    // 2. 取得最後一個月的（名目終值, 實質終值）
     let total_months = ci.total_years * 12;
-    let (nom, real) = trends
-        .get(&anchor_roi_idx)
-        .and_then(|route| route.get(total_months))
+    let (nom, real) = anchor_route
+        .and_then(|route| route.data.get(total_months))
         .copied()
         .unwrap_or((0.0, 0.0));
 
-    // 3. 完美利用：`future_mode_val` 生成未來投入模式描述
     let future_desc = match future_mode_val {
         FutureMode::Stop => "未來不再投入".to_string(),
         FutureMode::Invest => format!("未來每月投入 {}", format_twd_financial(ci.f_inv.abs())),
         FutureMode::Withdraw => format!("未來每月提領 {}", format_twd_financial(ci.f_inv.abs())),
     };
 
-    // 4. 生成結尾資產累積描述
     let end_str = if nom <= 0.0 {
-        format!("⚠️ 資產恐將耗盡（名目終值 {}）", format_twd_financial(nom))
+        let mut bankruptcy_text =
+            format!("⚠️ 資產恐將耗盡（名目終值 {}）", format_twd_financial(nom));
+        if let Some(route) = anchor_route
+            && let Some(b_idx) = route
+                .data
+                .iter()
+                .position(|&(nominal_bal, _)| nominal_bal < 0.0)
+        {
+            let exact_age = ci.start_age + (b_idx / 12);
+            let b_months = b_idx % 12;
+
+            bankruptcy_text = if b_months > 0 {
+                format!(
+                    "🚨 警告：依此提領速度與模擬回報，資產預計將在 <strong style='color:#F43F5E;'>{} 歲 {} 個月</strong> 時提早耗盡歸零！",
+                    exact_age, b_months
+                )
+            } else {
+                format!(
+                    "🚨 警告：依此提領速度與模擬回報，資產預計將在 <strong style='color:#F43F5E;'>{} 歲整</strong> 時提早耗盡歸零！",
+                    exact_age
+                )
+            };
+        }
+
+        bankruptcy_text
     } else {
         let real_str = if ci.inflation_rate > 0 {
             format!("，實質購買力約 {}", format_twd_financial(real))
@@ -784,7 +876,6 @@ fn derive_future_summary(
         format!("資產累積名目約 {}{}", format_twd_financial(nom), real_str)
     };
 
-    // 5. 完美利用：`asset_wan_val` 與 `ci.anchor_roi_pct` 計算隱含年化資訊
     let av = asset_wan_val * 10_000.0;
     let roi_info = if av != 0.0 {
         format!(
@@ -907,8 +998,7 @@ fn App() -> impl IntoView {
         cb.forget();
     }
 
-    // ─── 修正：將單純的閉包改為強大的 Memo，完美解決非追蹤上下文存取警告 ───
-    // Memo 會自動在 Leptos 內部的追蹤上下文執行第一次初始化，不會引發任何警告
+    // ─── 1. 基礎參數聚合 Memo ───
     let active_chart_input_memo = Memo::new(move |_| ChartInput {
         start_age: start_age.get(),
         total_years: total_years(),
@@ -921,14 +1011,13 @@ fn App() -> impl IntoView {
         window_width: window_width.get(),
     });
 
-    // ─── Debounced ChartInput 接收端信號 ──────────────────────────────
-    // 初始值採用 untracked（或直接複製 Memo 的當前數值）來防禦警告
-    let (chart_input, set_chart_input) = signal(active_chart_input_memo.get_untracked());
+    // ─── 2. Debounced 接收端信號（控制高頻輸入） ───
+    let (debounced_chart_input, set_debounced_chart_input) =
+        signal(active_chart_input_memo.get_untracked());
 
-    // ─── 精準的 300ms 節流防禦 Effect ─────────────────────────────────
-    // 當 Memo 的上游參數改變時，這裡會被觸發，並透過計時器延遲更新 chart_input
+    // 精準的 300ms 節流防禦 Effect
     Effect::new(move |_| {
-        let new_ci = active_chart_input_memo.get(); // 這裡在 Effect 內部，是完全安全的追蹤環境
+        let new_ci = active_chart_input_memo.get();
         #[cfg(target_family = "wasm")]
         {
             DEBOUNCE_TIMER.with(|id| {
@@ -938,7 +1027,7 @@ fn App() -> impl IntoView {
                         w.clear_timeout_with_handle(old);
                     }
                     let cb = wasm_bindgen::closure::Closure::once(move || {
-                        set_chart_input.set(new_ci);
+                        set_debounced_chart_input.set(new_ci);
                     });
                     let new_id = w
                         .set_timeout_with_callback_and_timeout_and_arguments_0(
@@ -953,14 +1042,32 @@ fn App() -> impl IntoView {
         }
         #[cfg(not(target_family = "wasm"))]
         {
-            set_chart_input.set(new_ci);
+            set_debounced_chart_input.set(new_ci);
         }
     });
 
-    // ─── Plot resource（維持不變，依然安全偵聽 chart_input） ───────────────
+    // ─── 3. ✨ 核心性能亮點：全系統唯一的複利數據計算源 ✨ ───
+    // 這個 Memo 只監聽 debounced_chart_input，不論下游重複讀取多少次，都只會運算一次
+    let trends_memo = Memo::new(move |_| {
+        let ci = debounced_chart_input.get();
+        calculate_true_pivot_trends(
+            ci.h_inv,
+            ci.f_inv,
+            ci.anchor_roi_pct,
+            ci.inflation_rate,
+            ci.hist_years,
+            ci.total_years,
+            ci.lump_sum,
+        )
+    });
+
+    // ─── 4. Plot 異步 Resource（修改為直接從共享的 trends_memo 提煉，不再重複計算） ───
     let plot_resource = LocalResource::new(move || async move {
-        let ci = chart_input.get();
-        generate_plot(ci)
+        let ci = debounced_chart_input.get();
+        let trends = trends_memo.get(); // 👈 直接從緩存獲取，速度極快
+
+        // 呼叫更新後的 generate_plot (我們將在下一段重構 generate_plot)
+        generate_plot(ci, trends)
     });
 
     // ─── Effects ────────────────────────────────────────────────────
@@ -1020,46 +1127,41 @@ fn App() -> impl IntoView {
             // ── 情境摘要卡片（重構後：邏輯清晰、極易讀） ───────────────────
             <div class="summary-card">
                 {move || {
-                    let ci = chart_input.get();
+                    let ci = debounced_chart_input.get();
+                    let trends = trends_memo.get();
                     let sage = start_age.get();
                     let tage = target_age.get();
 
-                    // 呼叫純計算邏輯
                     let (future_desc, end_str, roi_info) = derive_future_summary(
-                        &ci, asset_wan.get(), future_mode.get()
+                        &ci, &trends, asset_wan.get(), future_mode.get()
                     );
 
                     let roi = ci.anchor_roi_pct;
 
                     match (ci.hist_years, ci.lump_sum == 0.0) {
-                        // 情境 A：白手起家（無歷史、無起始本金）
                         (0, true) => {
                             let intro = if sage == 0 { "👶 幫新生兒從 0 歲白手起家 — " } else { "📊 規劃從 " };
                             view! { <span class="summary-text">
                                 {intro} {if sage > 0 { format!("{} 歲出發 — ", sage) } else { "".to_string() }}
                                 {future_desc} "，預計年化報酬率 " {format!("{roi:.2}")} "% 在 "
-                                <strong>{tage}</strong> " 歲時" {end_str}
+                                <strong>{tage}</strong> " 歲時，" <span inner_html=end_str />
                             </span> }.into_any()
                         },
-
-                        // 情境 B：單純單筆配置（無歷史、有起始本金）
                         (0, false) => {
                             let intro = if sage == 0 { "👶 幫小孩從 0 歲配置 — " } else { "💰 規劃從 " };
                             let ls_desc = format!("起始本金 {}", format_twd_financial(ci.lump_sum));
                             view! { <span class="summary-text">
                                 {intro} {if sage > 0 { format!("{} 歲配置 — ", sage) } else { "".to_string() }}
                                 {ls_desc} "，" {future_desc} "，預計年化報酬率 " {format!("{roi:.2}")} "% 在 "
-                                <strong>{tage}</strong> " 歲時" {end_str}
+                                <strong>{tage}</strong> " 歲時，" <span inner_html=end_str />
                             </span> }.into_any()
                         },
-
-                        // 情境 C：已有過去投資歷史
                         (_hist, _) => {
                             view! { <span class="summary-text">
                                 "自 " <strong>{sage}</strong> " 歲起每月投資 " <strong>{format_twd_financial(ci.h_inv)}</strong>
                                 "，至今已投 " <strong>{ci.hist_years}</strong> " 年" {roi_info}
                                 "。調整戰略為：" {future_desc} "，期望在 "
-                                <strong>{tage}</strong> " 歲時" {end_str}
+                                <strong>{tage}</strong> " 歲時，" <span inner_html=end_str />
                             </span> }.into_any()
                         }
                     }
@@ -1314,7 +1416,7 @@ fn App() -> impl IntoView {
                                     <select class="control-select" on:change=move |ev| {
                                         if let Ok(val) = event_target_value(&ev).parse::<usize>() { set_inflation_rate.set(val); }
                                     }>
-                                        {move || (0..=6).map(|r| {
+                                        {move || (0..=10).map(|r| {
                                             let label = if r == 0 { "🚫 不考慮通膨 (0%)".to_string() } else { format!("📉 通膨率：{}%/年", r) };
                                             view! { <option value=r selected=move || inflation_rate.get() == r>{label}</option> }
                                         }).collect::<Vec<_>>()}
@@ -1361,9 +1463,6 @@ fn main() {
     leptos::prelude::mount_to_body(App);
 }
 
-// =====================================================================
-// # 7. 測試模組 - 第一部分：智慧型金融格式化單元測試
-// =====================================================================
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1380,10 +1479,10 @@ mod tests {
     #[test]
     fn test_twd_financial_under_ten_thousand() {
         // 🎯 測試低於一萬的狀況：直接顯示千分位整數，不帶「萬」或「億」
-        assert_eq!(format_twd_financial(0.0), "0");
-        assert_eq!(format_twd_financial(150.0), "150");
-        assert_eq!(format_twd_financial(9999.0), "9,999");
-        assert_eq!(format_twd_financial(-8500.0), "-8,500");
+        assert_eq!(format_twd_financial(0.0), "0元");
+        assert_eq!(format_twd_financial(150.0), "150元");
+        assert_eq!(format_twd_financial(9999.0), "9,999元");
+        assert_eq!(format_twd_financial(-8500.0), "-8,500元");
     }
 
     #[test]
@@ -1415,22 +1514,19 @@ mod tests {
     #[test]
     fn test_text_row_alignment() {
         // 🎯 測試等寬對齊與 HTML 標籤注入的字串長度與結構
-        let normal_row = make_clean_text_row("ROI  5%", "500萬", "500萬", false);
+        let normal_row = make_clean_text_row("ROI  5%", "500萬", "500萬", false, false, false);
         assert!(normal_row.contains("style='font-family:Consolas,monospace;'"));
         assert!(normal_row.contains("ROI  5%"));
         // 由於沒有折現落差，不應該出現「折現：」字樣
         assert!(!normal_row.contains("折現："));
 
-        let discount_row = make_clean_text_row("ROI 10%", "1,000萬", "800萬", false);
+        let discount_row = make_clean_text_row("ROI 10%", "1,000萬", "800萬", false, true, false);
         assert!(discount_row.contains("折現："));
 
-        let highlight_row = make_clean_text_row("ROI 10%", "1億", "1億", true);
+        let highlight_row = make_clean_text_row("ROI 10%", "1億", "1億", true, true, false);
         assert!(highlight_row.contains("color:#F43F5E; font-weight:bold;"));
-    }
 
-    #[test]
-    fn test_short_text_row() {
-        let short_row = make_short_clean_text_row("ROI  5%", "350萬", true);
+        let short_row = make_clean_text_row("ROI  5%", "350萬", "350萬", true, true, true);
         assert!(short_row.contains("color:#F43F5E; font-weight:bold;"));
         assert!(short_row.contains("350萬"));
     }
@@ -1443,13 +1539,12 @@ mod tests {
     fn test_calculate_true_pivot_trends_basic_structure() {
         let h_inv = 10000.0; // 歷史每月投入 1 萬
         let f_inv = 20000.0; // 未來每月改投 2 萬
-        let anchor_roi_pct = 10.5; // 🎯 修正 #3：傳入精確的 f64 歷史年化報酬率
+        let anchor_roi_pct = 10.5; // 精確的 f64 歷史年化報酬率 (非整數)
         let inflation_rate = 2;
         let hist_years = 5;
         let total_years = 15;
         let lump_sum = 2000000.0; // 現有資產 200 萬
 
-        // 🎯 核心修正：100% 完美對齊您的 7 參數函數簽章與型別順序
         let trends = calculate_true_pivot_trends(
             h_inv,
             f_inv,
@@ -1460,16 +1555,31 @@ mod tests {
             lump_sum,
         );
 
-        // 驗證雜湊表是否完整生成 0% 到 20% 的 21 條預測線
-        assert_eq!(trends.len(), 21);
-        for r in 0..=20 {
-            assert!(trends.contains_key(&r));
+        // 🎯 驗證結構：因為 10.5% 不是整數，所以除了 0..=20 共 21 條整數線外，會額外外掛 1 條精確主線，總共 22 條！
+        assert_eq!(trends.len(), 22);
+
+        // 驗證是否按報酬率由小到大嚴格排序
+        for i in 0..trends.len() - 1 {
+            assert!(
+                trends[i].roi_pct <= trends[i + 1].roi_pct,
+                "軌道未按報酬率由小到大排序！位置 {}: {}, 位置 {}: {}",
+                i,
+                trends[i].roi_pct,
+                i + 1,
+                trends[i + 1].roi_pct
+            );
         }
 
         // 驗證總時間序列長度 (15年 * 12個月 + 1個起始點 = 181)
         let expected_months = total_years * 12 + 1;
-        let anchor_idx = anchor_roi_pct.round() as usize;
-        assert_eq!(trends[&anchor_idx].len(), expected_months);
+
+        // 尋找精確主線，驗證其長度
+        let anchor_route = trends
+            .iter()
+            .find(|r| r.is_anchor)
+            .expect("必須找到精確主線");
+        assert_eq!(anchor_route.data.len(), expected_months);
+        assert!((anchor_route.roi_pct - 10.5).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -1493,47 +1603,51 @@ mod tests {
         );
 
         let hist_months = hist_years * 12;
-        let anchor_idx = anchor_roi_pct.round() as usize;
 
         // 🎯 金融鐵律 1：在歷史期間（已發生），「名目資產」必定等於「實質資產」
-        #[allow(clippy::needless_range_loop)]
-        for m in 0..=hist_months {
-            let (nominal, real) = trends[&anchor_idx][m];
-            assert!(
-                (nominal - real).abs() < 1e-4,
-                "歷史期間（第 {} 個月）名目與實質應完全相等。名目: {}, 實質: {}",
-                m,
-                nominal,
-                real
-            );
+        // 我們直接對包含主線在內的所有軌道進行全面驗證
+        for route in trends.iter() {
+            for m in 0..=hist_months {
+                let (nominal, real) = route.data[m];
+                assert!(
+                    (nominal - real).abs() < 1e-4,
+                    "歷史期間（第 {} 個月）名目與實質應完全相等。ROI: {}, 名目: {}, 實質: {}",
+                    m,
+                    route.roi_pct,
+                    nominal,
+                    real
+                );
+            }
         }
 
-        // 🎯 金融鐵律 2：在歷史結算點（含）以前，所有 21 條預測線線路軌跡必須百分之百重合，消滅分叉！
-        #[allow(clippy::needless_range_loop)]
+        // 🎯 金融鐵律 2：在歷史結算點（含）以前，所有預測軌跡必須百分之百重合，消滅分叉！
+        // 我們以主線 (is_anchor) 作為物理基準錨定點進行比對
+        let anchor_route = trends.iter().find(|r| r.is_anchor).expect("找不到主線");
         for m in 0..=hist_months {
-            let anchor_val = trends[&anchor_idx][m];
-            for r in 0..=20 {
-                let current_val = trends[&r][m];
+            let anchor_val = anchor_route.data[m];
+            for route in trends.iter() {
+                let current_val = route.data[m];
                 assert!(
                     (current_val.0 - anchor_val.0).abs() < 1e-4,
-                    "歷史期間所有 ROI 軌跡應完全重合（第 {} 個月不應出現分叉）。ROI {}: {}, ROI {}: {}",
+                    "歷史期間所有 ROI 軌跡應完全重合。第 {} 個月, 主線({}): {}, 測試線({}): {}",
                     m,
-                    anchor_idx,
+                    anchor_route.roi_pct,
                     anchor_val.0,
-                    r,
+                    route.roi_pct,
                     current_val.0
                 );
             }
         }
 
         // 🎯 金融鐵律 3：歷史期的最後一個月（現在結算點），必須精確等於使用者填寫的 lump_sum，像素級鎖定！
-        for r in 0..=20 {
-            let current_current_asset = trends[&r][hist_months].0;
+        for route in trends.iter() {
+            let current_asset = route.data[hist_months].0;
             assert!(
-                (current_current_asset - lump_sum).abs() < 1e-4,
-                "歷史結算點終點數值（{}）必須完美等於使用者宣告的資產（{}）",
-                current_current_asset,
-                lump_sum
+                (current_asset - lump_sum).abs() < 1e-4,
+                "歷史結算點終點數值（{}）必須完美等於使用者宣告的資產（{}）。ROI: {}",
+                current_asset,
+                lump_sum,
+                route.roi_pct
             );
         }
     }
@@ -1542,7 +1656,7 @@ mod tests {
     fn test_future_inflation_law() {
         let h_inv = 10000.0;
         let f_inv = -15000.0; // 模擬每月實質提領 1.5 萬
-        let anchor_roi_pct = 6.0;
+        let anchor_roi_pct = 6.0; // 剛好是整數的情況
         let inflation_rate = 2; // 通膨年化 2%
         let hist_years = 0; // 全新起點，直接進入未來
         let total_years = 20;
@@ -1562,12 +1676,11 @@ mod tests {
         let inflation_monthly_rate = (1.0 + (inflation_rate as f64) / 100.0).powf(1.0 / 12.0) - 1.0;
 
         // 🎯 金融鐵律：在未來期間任何一個時間點，名目金額必定等於 實質金額 * 累計通膨率
-        #[allow(clippy::needless_range_loop)]
         for m in 1..=total_months {
             let cumulative_inflation_factor = (1.0 + inflation_monthly_rate).powf(m as f64);
 
-            for r in 0..=20 {
-                let (nominal, real) = trends[&r][m];
+            for route in trends.iter() {
+                let (nominal, real) = route.data[m];
                 if real.abs() > 0.001 {
                     let calculated_nominal = real * cumulative_inflation_factor;
                     let diff_ratio = (nominal - calculated_nominal).abs() / nominal.abs();
@@ -1575,7 +1688,7 @@ mod tests {
                         diff_ratio < 1e-4,
                         "未來區間必須嚴格遵循 名目 = 實質 * 累計通膨 的鐵律。第 {} 個月, ROI {}: 名目 {}, 計算值 {}",
                         m,
-                        r,
+                        route.roi_pct,
                         nominal,
                         calculated_nominal
                     );
@@ -1588,29 +1701,16 @@ mod tests {
     fn test_zero_years_edge_case() {
         let lump_sum = 3500000.0; // 設定 350 萬一桶金
 
-        // 🎯 測試極端邊界：若歷史年數為 0，歷史與未來衔接點（即第0個月）應正常初始化為傳入的 lump_sum 起始資金
+        // 🎯 測試極端邊界：若歷史年數為 0，第 0 個月應正常初始化為傳入的 lump_sum
         let trends = calculate_true_pivot_trends(20000.0, 20000.0, 7.0, 2, 0, 10, lump_sum);
 
-        for r in 0..=20 {
-            let (nominal_start, real_start) = trends[&r][0];
+        for route in trends.iter() {
+            let (nominal_start, real_start) = route.data[0];
             assert_eq!(nominal_start, lump_sum);
             assert_eq!(real_start, lump_sum);
         }
     }
 
-    #[test]
-    fn test_row_formatting_utilities() {
-        // 驗證寬螢幕與窄螢幕文字產生器是否如預期運作，防止渲染文字格式倒退
-        let row_long = make_clean_text_row("ROI 10%", "$1,000", "$1,200", true);
-        assert!(row_long.contains("ROI 10%"));
-        assert!(row_long.contains("$1,000"));
-
-        let row_short = make_short_clean_text_row("ROI 5%", "$500", false);
-        assert!(row_short.contains("ROI 5%"));
-        assert!(row_short.contains("$500"));
-    }
-
-    /// 擴充測試 3：轉折點銜接與發散測試（修復了原本的雜湊表與元組語法錯誤）
     #[test]
     fn test_pivot_point_cohesion_and_divergence() {
         let h_inv = 8000.0;
@@ -1632,27 +1732,35 @@ mod tests {
         );
 
         let hist_months = hist_years * 12;
-        let anchor_idx = anchor_roi_pct.round() as usize;
+        let anchor_route = trends.iter().find(|r| r.is_anchor).expect("找不到主線");
 
-        // 🔍 歷史點檢查：在歷史期間內，所有 21 條軌道的數值必須與主線完全重合
-        #[allow(clippy::needless_range_loop)]
+        // 🔍 歷史點檢查：在歷史期間內，所有軌道的數值必須與主線完全重合
         for m in 0..=hist_months {
-            let anchor_val = trends[&anchor_idx][m];
-            for r in 0..=20 {
+            let anchor_val = anchor_route.data[m];
+            for route in trends.iter() {
                 assert_eq!(
-                    trends[&r][m], // 修正：正確的雜湊表二維點選語法
-                    anchor_val,
+                    route.data[m], anchor_val,
                     "在第 {} 個月（歷史期），ROI {}% 應該與主線完全重合",
-                    m,
-                    r
+                    m, route.roi_pct
                 );
             }
         }
 
         // 🔍 未來點檢查：超過歷史期後，高低 ROI 軌道必須在未來終點產生合理的發散分叉
         let final_idx = total_years * 12;
-        let val_5pct = trends[&5][final_idx].0; // 修正：使用 .0 存取元組的第一個元素（名目資產）
-        let val_15pct = trends[&15][final_idx].0;
+
+        let route_5pct = trends
+            .iter()
+            .find(|r| (r.roi_pct - 5.0).abs() < f64::EPSILON)
+            .expect("找不到 5% 線");
+        let route_15pct = trends
+            .iter()
+            .find(|r| (r.roi_pct - 15.0).abs() < f64::EPSILON)
+            .expect("找不到 15% 線");
+
+        let val_5pct = route_5pct.data[final_idx].0;
+        let val_15pct = route_15pct.data[final_idx].0;
+
         assert!(
             val_15pct > val_5pct,
             "未來終點時，15% ROI 的名目資產（{}）應大於 5% ROI 的資產（{}）",
@@ -1682,7 +1790,13 @@ mod tests {
             lump_sum,
         );
 
-        let entries = &trends[&10];
+        // 🎯 核心修正：從新版有序 Vec 中精確找出 10% 報酬率的軌道
+        let route_10pct = trends
+            .iter()
+            .find(|r| (r.roi_pct - 10.0).abs() < f64::EPSILON)
+            .expect("測試中必須能找到 10% 的報酬率軌道");
+
+        let entries = &route_10pct.data;
 
         // 驗證第 0 個月
         assert_eq!(entries[0].0, 100_000.0);
@@ -1720,8 +1834,18 @@ mod tests {
             window_width: 1200,
         };
 
+        let trends = calculate_true_pivot_trends(
+            ci.h_inv,
+            ci.f_inv,
+            ci.anchor_roi_pct,
+            ci.inflation_rate,
+            ci.hist_years,
+            ci.total_years,
+            ci.lump_sum,
+        );
+
         // 驗證圖表引擎是否能正常吞下結構體，並產出合法的 JSON 配置
-        let plot = generate_plot(ci);
+        let plot = generate_plot(ci, trends);
         let json_str = plot.to_json();
         assert!(!json_str.is_empty(), "生成的圖表 JSON 配置字串不應為空");
     }
