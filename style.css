@@ -1,36 +1,17 @@
 /* =====================================================================
-   # 1. DESIGN TOKENS & CSS RESET (全域設計變數與重設)
+   # 1. DESIGN TOKENS & GLOBAL RESET
    ===================================================================== */
 :root {
-  /* Layout Colors (背景與區塊底色) */
   --bg-primary: #0F172A;
-  /* Slate 900: 網頁大底色 */
   --bg-secondary: #1E293B;
-  /* Slate 800: 卡片與控制面板底色 */
   --bg-input: #334155;
-  /* Slate 700: 輸入框與選單底色 */
-
-  /* Border Colors (邊框色矩陣) */
   --border-color: #475569;
-  /* Slate 600: 預設暗色邊框 */
   --border-color-hover: #64748B;
-  /* Slate 500: 懸停高亮邊框 */
-
-  /* Text Colors (狀態文字) */
   --text-primary: #F8FAFC;
-  /* Slate 50: 高對比接近純白 */
   --text-secondary: #CBD5E1;
-  /* Slate 300: 溫和內斂內文灰 */
-
-  /* Accent Colors (戰略核心視覺色) */
   --accent-red: #F43F5E;
-  /* Rose 500: 核心主線/警告色 */
   --accent-teal: #2DD4BF;
-  /* Teal 400: 互動/霓虹高亮色 */
   --emerald: #10B981;
-  /* Emerald 500: 提示/安全翡翠綠 */
-
-  /* Typography & Animation (字型與動畫緩動) */
   --font-family: "Microsoft JhengHei", "PingFang TC", "Heiti TC", "Noto Sans TC", "Microsoft YaHei", sans-serif;
   --transition-smooth: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
@@ -38,7 +19,6 @@
 * {
   box-sizing: border-box;
   -webkit-tap-highlight-color: transparent;
-  /* 移除行動裝置點擊時的原生藍色陰影 */
 }
 
 html,
@@ -47,12 +27,8 @@ body {
   padding: 0;
   background-color: var(--bg-primary);
   overflow-x: hidden;
-  /* 防止窄螢幕元件溢出產生橫向滾動條 */
 }
 
-/* =====================================================================
-   # 2. APP FRAMEWORK (全域主容器佈局)
-   ===================================================================== */
 .app-container {
   min-height: 100vh;
   padding: clamp(12px, 3vw, 20px);
@@ -67,25 +43,22 @@ body {
   padding: 0 4px;
   color: var(--text-primary);
   font-size: clamp(1.05rem, 2.4vw + 0.4rem, 1.5rem);
-  /* 防止 RWD 折行爆版 */
   font-weight: bold;
   line-height: 1.45;
   text-align: center;
 }
 
 /* =====================================================================
-   # 3. INTERACTIVE CONTROLS PANEL (BEM 重構：科技感可收合控制面板)
+   # 2. CONTROLS PANEL (全域與基礎桌面端佈局)
    ===================================================================== */
 .controls-panel {
   margin-bottom: 16px;
   background-color: rgba(30, 41, 59, 0.4);
-  /* 半透明毛玻璃質感 */
   border: 1px solid var(--border-color);
   border-radius: 10px;
   overflow: hidden;
 }
 
-/* 面板標題列 (偽裝成平滑按鈕) */
 .controls-summary {
   display: flex;
   align-items: center;
@@ -107,7 +80,6 @@ body {
   background-color: rgba(255, 255, 255, 0.02);
 }
 
-/* 高級科技感膠囊狀態標籤 (Capsule Badge) */
 .panel-status-badge {
   display: inline-flex;
   align-items: center;
@@ -127,11 +99,9 @@ body {
   display: inline-block;
   font-size: 0.85em;
   transform: translateY(0.5px);
-  /* 物理修正中文字型與文字箭頭的不對齊痛點 */
   transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-/* 狀態 Modifier: 當 Leptos 切換面板為「展開」時 (.badge-open) */
 .panel-status-badge.badge-open {
   background-color: rgba(45, 212, 191, 0.06);
   border-color: rgba(45, 212, 191, 0.4);
@@ -141,15 +111,12 @@ body {
 
 .panel-status-badge.badge-open .badge-arrow {
   transform: rotate(180deg) translateY(-0.5px);
-  /* 箭頭順暢倒轉朝上 */
 }
 
-/* 標題列整體 Hover 連動反應 */
 .controls-summary:hover .panel-status-badge {
   background-color: var(--accent-teal);
   border-color: var(--accent-teal);
   color: var(--bg-primary);
-  /* 強烈反色對比，點擊暗示極強 */
   box-shadow: 0 0 12px rgba(45, 212, 191, 0.3);
 }
 
@@ -163,11 +130,10 @@ body {
 }
 
 /* =====================================================================
-   # 4. RWD FORMS GRID & INPUTS (表單網格與智慧型對齊組件)
+   # 3. CORE UI COMPONENTS (表單、輸入框、客製化下拉、Toggle)
    ===================================================================== */
 .controls-grid {
   display: grid;
-  /* 智慧型自適應：桌機端並排，隨螢幕變窄自動平滑拆行與流動 */
   grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
   gap: 14px;
   width: 100%;
@@ -175,15 +141,12 @@ body {
 
 .control-group {
   min-width: 0;
-  /* 防禦機制：防止中文長字串撐開 Grid 導致破版 */
 }
 
 .control-label {
   display: block;
-  /* 💡 核心設計：強制設定固定 2 行的最小高度。
-     確保不論文字因折行變成 1 行或 2 行，下方的下拉選單永遠維持完美的水平對齊線。 */
   min-height: 2.6em;
-  margin-bottom: 8px;
+  margin-bottom: 2px;
   padding-top: 4px;
   color: var(--text-secondary);
   font-size: 0.85rem;
@@ -196,11 +159,10 @@ body {
   position: relative;
 }
 
-/* 客製化下拉選單本體 */
 .control-select {
   width: 100%;
   min-height: 36px;
-  padding: 8px 40px 8px 12px;
+  padding: 3px 4px;
   background-color: var(--bg-secondary);
   background-image: url('data:image/svg+xml;charset=US-ASCII,<svg xmlns="http://w3.org" width="292.4" height="292.4" fill="%23CBD5E1"><path d="M287 69.4a17.6 17.6 0 0 0-13-5.4H18.4c-5 0-9.3 1.8-12.9 5.4A17.6 17.6 0 0 0 0 82.2c0 5 1.8 9.3 5.4 12.9l128 127.9c3.6 3.6 7.8 5.4 12.8 5.4s9.2-1.8 12.8-5.4L287 95c3.5-3.5 5.4-7.8 5.4-12.8 0-5-1.9-9.2-5.5-12.8z"/></svg>');
   background-repeat: no-repeat;
@@ -212,7 +174,6 @@ body {
   font-size: 0.875rem;
   font-family: var(--font-family);
   cursor: pointer;
-  /* 拔除各家瀏覽器的原生預設箭頭，改用上方客製化向量 SVG */
   appearance: none;
   -webkit-appearance: none;
   -moz-appearance: none;
@@ -229,7 +190,6 @@ body {
   box-shadow: 0 0 0 3px rgba(244, 63, 94, 0.25);
   outline: none;
 }
-
 
 /* =====================================================================
    # 4.5. 新 UI 元件：摘要卡、數字輸入、提示、Toggle
@@ -255,13 +215,12 @@ body {
 }
 
 .summary-highlight {
-  color: var(--accent-teal) !important;
+  color: var(--accent-teal);
 }
 
-/* 數字輸入框 */
 .number-input {
   width: 100%;
-  min-height: 36px;
+  min-height: 30px;
   padding: 8px 12px;
   border-radius: 6px;
   background-color: var(--bg-secondary);
@@ -300,7 +259,7 @@ body {
   margin-top: 5px;
   font-size: 0.75rem;
   color: var(--text-secondary);
-  min-height: 1.2em;
+  min-height: auto;
   line-height: 1.4;
 }
 
@@ -312,7 +271,6 @@ body {
   color: var(--accent-teal);
 }
 
-/* 未來計畫 Toggle 按鈕組 */
 .toggle-group {
   display: flex;
   gap: 6px;
@@ -321,7 +279,7 @@ body {
 .toggle-btn {
   flex: 1;
   min-height: 36px;
-  padding: 8px 4px;
+  padding: 3px 4px;
   border-radius: 6px;
   border: 1px solid var(--border-color);
   background: transparent;
@@ -329,8 +287,8 @@ body {
   font-size: 0.875rem;
   font-family: var(--font-family);
   cursor: pointer;
+  border-radius: 6px;
   transition: var(--transition-smooth);
-  white-space: nowrap;
 }
 
 .toggle-btn:hover {
@@ -379,7 +337,6 @@ body {
 .chart-header {
   display: flex;
   justify-content: flex-end;
-  /* 右對齊，將按鈕排在 Plotly 畫布外部 */
   margin-bottom: 4px;
 }
 
@@ -417,7 +374,6 @@ body {
   overflow: hidden;
 }
 
-/* 戰略底部導覽註解卡片 */
 .chart-footer-notes {
   padding: 1.15rem 1.4rem;
   background: linear-gradient(135deg, rgba(45, 212, 191, 0.06) 0%, rgba(15, 23, 42, 0.4) 100%);
@@ -447,53 +403,92 @@ body {
    # 6. RWD RESPONSIVE BREAKPOINTS (行動裝置與手機橫放極限優化)
    ===================================================================== */
 
-/* 📱 手機直向模式 (螢幕寬度 ≤ 640px) */
+/* 📱 手機直向模式 (螢幕寬度 ≤ 640px) ── 全功能懸浮彈窗修正 */
 @media (max-width: 640px) {
+
+  /* 1. 全域容器留白與大標題 */
+  .app-container {
+    padding: 10px 12px;
+  }
+
   .app-title {
+    font-size: 1.1rem;
     margin-bottom: 12px;
   }
 
+  /* 2. 解除全域 overflow: hidden 的阻擋，並啟動 sticky 漂浮 */
   .controls-panel {
-    margin-bottom: 12px;
+    position: sticky;
+    top: 10px;
+    z-index: 9999;
+    border: none;
+    background: none;
+    margin-bottom: 14px;
+    /* 🌟 強制覆蓋全域的裁切，允許內層絕對定位彈出 */
+    overflow: visible;
   }
 
+  /* 3. ⚙️ 按鈕本體設定 */
   .controls-summary {
-    padding: 8px 14px;
+    width: 100%;
+    background: #1E293B;
+    border: 1px solid rgba(45, 212, 191, 0.4);
+    border-radius: 8px;
+    padding: 10px 16px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  }
+
+  .controls-summary .summary-title {
+    font-size: 0.85rem;
+    font-weight: 600;
+  }
+
+  .panel-status-badge {
+    padding: 4px 10px;
     font-size: 0.75rem;
   }
 
+  /* 4. 🌟 終極修正：將展開面板改為全功能懸浮窗，並加入極致滾動防護 */
   .controls-body {
-    padding: 4px 14px 14px;
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: calc(100% + 8px);
+    z-index: 10000;
+    background-color: #1E293B;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 16px;
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.7);
+    max-height: 70vh;
+    overflow-y: auto;
   }
 
   .controls-grid {
-    gap: 10px;
+    gap: 12px;
+    grid-template-columns: 1fr;
   }
 
   .control-label {
     margin-bottom: 6px;
-  }
-
-  .control-select {
-    padding: 8px 34px 8px 10px;
+    min-height: auto;
+    /* 手機端單欄不需要強迫對齊線高度 */
   }
 
   .controls-grid-future {
     grid-template-columns: 1fr;
-    /* 寬度不足時，讓未來計畫與通膨率改為滑順的上下排版 */
     gap: 12px;
-    /* 給予元件之間健康的呼吸空間 */
   }
 
   .toggle-group {
     display: flex;
     gap: 4px;
-    /* 稍微縮小按鈕間距 */
   }
 
-  .toggle-btn {
-    padding: 8px 2px;
-    letter-spacing: 0px;
+  /* 圖表降級層級，安心在底下鋪墊 */
+  .graph-container {
+    position: relative;
+    z-index: 1;
   }
 }
 
@@ -508,9 +503,9 @@ body {
   }
 }
 
-/* 🔄 行動裝置橫放模式 (螢幕高度 ≤ 480px，Landscape)
-   垂直高度極度珍貴：全面壓縮所有外距與元件尺寸，讓參數設定列高度最小化，
-   使收合後的 Plotly 大圖表能吃滿高達 80% 以上的垂直可視範圍！ */
+/* =====================================================================
+   # 6. 🔄 手機橫放模式 (LANDSCAPE BREAKPOINT) ── ⚡ 解鎖滾動條、拒絕凍結
+   ===================================================================== */
 @media (max-height: 480px) and (orientation: landscape) {
   .app-container {
     padding: 8px 16px;
@@ -526,32 +521,48 @@ body {
   }
 
   .controls-summary {
-    padding: 8px 14px;
+    padding: 3px 14px;
     font-size: 0.75rem;
   }
 
   .controls-body {
-    padding: 2px 14px 10px;
+    padding: 1px 14px 10px;
   }
 
   .controls-grid {
-    /* 橫放時縮減單欄最小寬度至 150px，強迫多個選單格子在橫向畫面中盡量並排擠在同一列 */
     grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-    gap: 8px;
+    gap: 0px 5px;
   }
 
   .control-label {
-    font-size: 0.7rem;
-    min-height: 2.2em;
-    margin-bottom: 4px;
+    font-size: 0.6rem;
+    min-height: auto;
+    margin-bottom: 1px;
   }
 
+  .toggle-btn,
   .control-select {
-    min-height: 36px;
-    padding: 8px 30px 8px 9px;
+    min-height: 30px;
+    padding: 3px 3px;
+    font-size: 0.8rem;
   }
 
   .controls-grid-future {
     grid-template-columns: 2fr 1fr;
+  }
+
+  .number-input {
+    min-height: 30px;
+    padding: 3px 10px;
+    font-size: 0.8rem;
+  }
+
+  /* 財務提示詞微縮歸位 */
+  .input-hint {
+    display: block;
+    margin-top: 2px;
+    font-size: 0.6rem;
+    min-height: auto;
+    line-height: 1.0;
   }
 }

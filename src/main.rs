@@ -51,7 +51,7 @@ thread_local! {
 }
 
 // =====================================================================
-// # 1. localStorage 記憶持久化工具
+// # 1. localStorage 記憶持久化工具（僅在 WASM 環境有效）
 // =====================================================================
 
 fn ls_get(key: &str) -> Option<String> {
@@ -82,6 +82,11 @@ fn ls_str(key: &str, default: &str) -> String {
 // # 2. 核心金融數學引擎（二分搜尋 ROI 與終值計算）
 // =====================================================================
 
+/// 由「目前資產 / 歷史月投 / 已投月數」以二分搜尋反推隱含年化報酬率（%）。
+/// 搜尋範圍 -99% ~ 50%，迭代 100 次，精確到約 0.01%。
+///
+/// - `current_asset` 允許為負（虧損或帶債起步）
+/// - 回傳 `None` 代表無法計算（`hist_months == 0` 或 `h_inv <= 0`）
 fn infer_roi_pct(current_asset: f64, h_inv: f64, hist_months: usize) -> Option<f64> {
     if hist_months == 0 || h_inv <= 0.0 {
         return None;
@@ -103,13 +108,23 @@ fn infer_roi_pct(current_asset: f64, h_inv: f64, hist_months: usize) -> Option<f
     }
 
     let final_roi = (lo + hi) / 2.0;
-
-    // 🎯 只要絕對值小於 0.005（四捨五入到第二位為 0.00），直接強行歸正為絕對正數 0.0
-    // 這能完美斬除 IEEE 754 殘留的微小負數符號零（-0.0%），一舉封印後端所有 UI 的疊字與負號瑕疵！
+    // 消除 IEEE 754 殘留的 -0.00% 符號
     if final_roi.abs() < 0.005 {
         Some(0.0)
     } else {
         Some(final_roi)
+    }
+}
+
+/// 將 ROI 數值格式化為固定欄寬的對齊標籤字串。
+///
+/// - 整數 ROI（例如 5、10、20）：`"ROI  5%"` / `"ROI 20%"`（右對齊到 4 位）
+/// - 主線 ROI（例如 8.5）：`"ROI 8.50%"`（固定顯示 4 個字 但進位 2 位小數）
+fn fmt_roi_label(roi_pct: f64, is_major: bool) -> String {
+    if is_major {
+        format!("ROI {:.4}%", format!("{:.2}", roi_pct))
+    } else {
+        format!("ROI {:4}%", roi_pct as usize)
     }
 }
 
@@ -447,7 +462,7 @@ fn generate_plot(ci: ChartInput, sorted_trends: Vec<TrendRoute>) -> Plot {
             if let Some(anchor_route) = sorted_trends.iter().find(|r| r.is_anchor) {
                 let amt = anchor_route.data[m];
                 let label = if let Some(roi_val) = ci.anchor_roi_pct {
-                    format!("ROI {:.4}%", format!("{:.2}", roi_val))
+                    fmt_roi_label(roi_val, true)
                 } else {
                     "ROI ----%".to_string()
                 };
@@ -467,9 +482,9 @@ fn generate_plot(ci: ChartInput, sorted_trends: Vec<TrendRoute>) -> Plot {
 
                 if route.is_anchor || is_integer {
                     let label = if route.is_anchor {
-                        format!("ROI {:.4}%", format!("{:.2}", ci.anchor_roi_pct()))
+                        fmt_roi_label(ci.anchor_roi_pct(), true)
                     } else {
-                        format!("ROI {:4}%", route.roi_pct as usize)
+                        fmt_roi_label(route.roi_pct, false)
                     };
                     lines.push(make_clean_text_row(
                         &label,
@@ -498,17 +513,14 @@ fn generate_plot(ci: ChartInput, sorted_trends: Vec<TrendRoute>) -> Plot {
 
         let label = if is_narrow {
             if route.is_anchor {
-                // 先鎖定兩位，再強迫格式化補滿固定寬度
-                format!("ROI {:.4}%", format!("{:.2}", ci.anchor_roi_pct()))
+                fmt_roi_label(ci.anchor_roi_pct(), true)
             } else {
-                format!("ROI {:4}%", route.roi_pct as usize)
+                fmt_roi_label(route.roi_pct, false)
             }
         } else if route.is_anchor {
-            // 寬螢幕主線情境
-            format!("ROI {:.4}% 主線", format!("{:.2}", ci.anchor_roi_pct()))
+            format!("{} 主線", fmt_roi_label(ci.anchor_roi_pct(), true))
         } else {
-            // 寬螢幕未來普通跡線情境
-            format!("ROI {:4}% 未來", route.roi_pct as usize)
+            format!("{} 未來", fmt_roi_label(route.roi_pct, false))
         };
 
         let legend_name = make_clean_text_row(
@@ -1172,61 +1184,6 @@ fn App() -> impl IntoView {
         <div class="app-container">
             <h2 class="app-title">"人生財務戰略導航：現況資產錨定與未來變革推演模擬器"</h2>
 
-            // ── 情境摘要卡片（重構後：邏輯清晰、極易讀） ───────────────────
-            <div class="summary-card">
-                {move || {
-                    let ci = debounced_chart_input.get();
-                    let trends = trends_memo.get();
-                    let sage = start_age.get();
-                    let tage = target_age.get();
-
-                    let (future_desc, end_str, roi_info) = derive_future_summary(
-                        &ci, &trends, asset_wan.get(), future_mode.get()
-                    );
-
-                    let roi = ci.anchor_roi_pct();
-
-                    match (ci.hist_years, ci.lump_sum == 0.0) {
-                        // 情境 A：白手起家（無歷史、無起始本金 ── 隱含報酬率必為 None）
-                        (0, true) => {
-                            let intro = if sage == 0 { "👶 幫新生兒從 0 歲白手起家 — " } else { "📊 規劃從 " };
-                            view! { <span class="summary-text">
-                                {intro} {if sage > 0 { format!("{} 歲出發 — ", sage) } else { "".to_string() }}
-                                {future_desc} "，以系統基準預估年化回報 " <strong>{format!("{roi:.2}")} "%"</strong> " 在 "
-                                <strong>{tage}</strong> " 歲時，" <span inner_html=end_str />
-                            </span> }.into_any()
-                        },
-
-                        // 情境 B：單純單筆配置（無歷史、有起始本金 ── 隱含報酬率必為 None）
-                        (0, false) => {
-                            let intro = if sage == 0 { "👶 幫小孩從 0 歲配置 — " } else { "💰 規劃從 " };
-                            let ls_desc = format!("起始本金 <strong>{}</strong>", format_twd_financial(ci.lump_sum));
-                            view! { <span class="summary-text">
-                                {intro} {if sage > 0 { format!("{} 歲配置 — ", sage) } else { "".to_string() }}
-                                <span inner_html=ls_desc /> "，" {future_desc} "，並以基準預估年化回報 " <strong>{format!("{roi:.2}")} "%"</strong> " 在 "
-                                <strong>{tage}</strong> " 歲時，" <span inner_html=end_str />
-                            </span> }.into_any()
-                        },
-
-                        // 情境 C：已有過去投資歷史（區分真實算出與 None 的歷史情境）
-                        (_hist, _) => {
-                            let strategy_desc = if ci.anchor_roi_pct.is_some() {
-                                format!("。延續此回報率並調整戰略為：{future_desc}，期望在 ", )
-                            } else {
-                                format!("。目前無隱含報酬，調整戰略為：{future_desc}，並以基準預估年化回報 {roi:.2}% 期望在 ")
-                            };
-
-                            view! { <span class="summary-text">
-                                "自 " {sage} " 歲起每月投資 " {format_twd_financial(ci.h_inv)}
-                                " 共投入 " <strong>{format_twd_financial(ci.h_inv_sum())}</strong>
-                                "，至今已投 " {ci.hist_years} " 年" <span inner_html=roi_info />
-                                {strategy_desc} <strong>{tage}</strong> " 歲時，" <span inner_html=end_str />
-                            </span> }.into_any()
-                        }
-                    }
-                }}
-            </div>
-
             // ── 控制面板外框 ───────────────────────────────────────────
             <div class=move || if panel_open.get() { "controls-panel panel-open" } else { "controls-panel" }>
                 <button class="controls-summary" on:click=move |_| set_panel_open.update(|v| *v = !*v)>
@@ -1409,7 +1366,6 @@ fn App() -> impl IntoView {
                                     }
                                 }}
                             </div>
-
                         </div>
 
                         // ── Row 2：未來計畫 + 通膨率 ──
@@ -1484,6 +1440,60 @@ fn App() -> impl IntoView {
                         </div>
                     </div>
                 </Show>
+            </div>
+            // ── 情境摘要卡片（重構後：邏輯清晰、極易讀） ───────────────────
+            <div class="summary-card">
+                {move || {
+                    let ci = debounced_chart_input.get();
+                    let trends = trends_memo.get();
+                    let sage = start_age.get();
+                    let tage = target_age.get();
+
+                    let (future_desc, end_str, roi_info) = derive_future_summary(
+                        &ci, &trends, asset_wan.get(), future_mode.get()
+                    );
+
+                    let roi = ci.anchor_roi_pct();
+
+                    match (ci.hist_years, ci.lump_sum == 0.0) {
+                        // 情境 A：白手起家（無歷史、無起始本金 ── 隱含報酬率必為 None）
+                        (0, true) => {
+                            let intro = if sage == 0 { "👶 幫新生兒從 0 歲白手起家 — " } else { "📊 規劃從 " };
+                            view! { <span class="summary-text">
+                                {intro} {if sage > 0 { format!("{} 歲出發 — ", sage) } else { "".to_string() }}
+                                {future_desc} "，以系統基準預估年化回報 " <strong>{format!("{roi:.2}")} "%"</strong> " 在 "
+                                <strong>{tage}</strong> " 歲時，" <span inner_html=end_str />
+                            </span> }.into_any()
+                        },
+
+                        // 情境 B：單純單筆配置（無歷史、有起始本金 ── 隱含報酬率必為 None）
+                        (0, false) => {
+                            let intro = if sage == 0 { "👶 幫小孩從 0 歲配置 — " } else { "💰 規劃從 " };
+                            let ls_desc = format!("起始本金 <strong>{}</strong>", format_twd_financial(ci.lump_sum));
+                            view! { <span class="summary-text">
+                                {intro} {if sage > 0 { format!("{} 歲配置 — ", sage) } else { "".to_string() }}
+                                <span inner_html=ls_desc /> "，" {future_desc} "，並以基準預估年化回報 " <strong>{format!("{roi:.2}")} "%"</strong> " 在 "
+                                <strong>{tage}</strong> " 歲時，" <span inner_html=end_str />
+                            </span> }.into_any()
+                        },
+
+                        // 情境 C：已有過去投資歷史（區分真實算出與 None 的歷史情境）
+                        (_hist, _) => {
+                            let strategy_desc = if ci.anchor_roi_pct.is_some() {
+                                format!("。延續此回報率並調整戰略為：{future_desc}，期望在 ", )
+                            } else {
+                                format!("。目前無隱含報酬，調整戰略為：{future_desc}，並以基準預估年化回報 {roi:.2}% 期望在 ")
+                            };
+
+                            view! { <span class="summary-text">
+                                "自 " {sage} " 歲起每月投資 " {format_twd_financial(ci.h_inv)}
+                                " 共投入 " <strong>{format_twd_financial(ci.h_inv_sum())}</strong>
+                                "，至今已投 " {ci.hist_years} " 年" <span inner_html=roi_info />
+                                {strategy_desc} <strong>{tage}</strong> " 歲時，" <span inner_html=end_str />
+                            </span> }.into_any()
+                        }
+                    }
+                }}
             </div>
             // ── 截圖按鈕 ─────────────────────────────────────────────
             <div class="chart-header">
@@ -1905,5 +1915,289 @@ mod tests {
         let plot = generate_plot(ci, trends);
         let json_str = plot.to_json();
         assert!(!json_str.is_empty(), "生成的圖表 JSON 配置字串不應為空");
+    }
+
+    // =====================================================================
+    // # 9. 新增測試 — infer_roi_pct
+    // =====================================================================
+
+    /// 基本正確性：已知本金 + 月投 + 月數，算出來的 ROI 反推回去應接近原始值
+    #[test]
+    fn test_infer_roi_pct_basic_roundtrip() {
+        let h_inv = 10_000.0;
+        let expected_annual_roi = 8.0_f64;
+        let hist_months = 120_usize; // 10 年
+
+        // 用已知 ROI 正向算出期末資產
+        let monthly_rate = (1.0 + expected_annual_roi / 100.0).powf(1.0 / 12.0) - 1.0;
+        let mut balance = 0.0;
+        for _ in 0..hist_months {
+            balance = (balance + h_inv) * (1.0 + monthly_rate);
+        }
+
+        // 反推應還原到接近 8.0%
+        let inferred =
+            infer_roi_pct(balance, h_inv, hist_months).expect("已知有效資料不應回傳 None");
+        assert!(
+            (inferred - expected_annual_roi).abs() < 0.01,
+            "反推值 {:.4}% 應接近 {:.2}%",
+            inferred,
+            expected_annual_roi
+        );
+    }
+
+    /// 邊界：hist_months = 0 必須回傳 None
+    #[test]
+    fn test_infer_roi_pct_zero_months_returns_none() {
+        assert!(infer_roi_pct(1_000_000.0, 10_000.0, 0).is_none());
+    }
+
+    /// 邊界：h_inv <= 0 必須回傳 None（無法除以零，也沒有意義）
+    #[test]
+    fn test_infer_roi_pct_zero_h_inv_returns_none() {
+        assert!(infer_roi_pct(500_000.0, 0.0, 60).is_none());
+        assert!(infer_roi_pct(500_000.0, -1000.0, 60).is_none());
+    }
+
+    /// 資產 = 0：代表所有月投都虧光，應推算出接近 -100% 的極端負值
+    #[test]
+    fn test_infer_roi_pct_zero_asset() {
+        let result = infer_roi_pct(0.0, 10_000.0, 12);
+        // 資產完全歸零代表每月都蒸發，ROI 必然極負
+        assert!(result.is_some());
+        assert!(result.unwrap() < -50.0, "零資產應推算出極度負值報酬率");
+    }
+
+    /// 資產為負數：帶債情況下應能推算出負報酬率
+    #[test]
+    fn test_infer_roi_pct_negative_asset() {
+        let result = infer_roi_pct(-200_000.0, 10_000.0, 60);
+        assert!(result.is_some());
+        assert!(
+            result.unwrap() < 0.0,
+            "資產為負時應推算出負報酬率，實際: {:.2}%",
+            result.unwrap()
+        );
+    }
+
+    /// 資產略高於純本金：對應接近 0% 的低報酬
+    #[test]
+    fn test_infer_roi_pct_near_zero_roi() {
+        let h_inv = 10_000.0;
+        let months = 12_usize;
+        // 純本金：月初投入，月底算（annuity-due），ROI=0 時最後餘額 = h_inv * months
+        let principal = h_inv * months as f64;
+        let result = infer_roi_pct(principal, h_inv, months).expect("有效輸入不應回傳 None");
+        assert!(
+            result.abs() < 1.0,
+            "純本金對應的 ROI 應接近 0%，實際: {:.4}%",
+            result
+        );
+    }
+
+    /// 精確度：ROI 反推誤差應小於 0.01%
+    #[test]
+    fn test_infer_roi_pct_precision() {
+        // 測試非整數的精確 ROI（12.75%）
+        let h_inv = 50_000.0;
+        let target_roi = 12.75_f64;
+        let hist_months = 240_usize; // 20 年
+
+        let r = (1.0 + target_roi / 100.0).powf(1.0 / 12.0) - 1.0;
+        let mut bal = 0.0;
+        for _ in 0..hist_months {
+            bal = (bal + h_inv) * (1.0 + r);
+        }
+
+        let inferred = infer_roi_pct(bal, h_inv, hist_months).unwrap();
+        assert!(
+            (inferred - target_roi).abs() < 0.01,
+            "應達到 0.01% 精度：目標 {target_roi}%，推算 {inferred:.4}%"
+        );
+    }
+
+    // =====================================================================
+    // # 10. 新增測試 — fmt_roi_label
+    // =====================================================================
+
+    #[test]
+    fn test_fmt_roi_label_integer() {
+        // 整數 ROI 格式
+        assert_eq!(fmt_roi_label(5.0, false), "ROI    5%");
+        assert_eq!(fmt_roi_label(10.0, false), "ROI   10%");
+        assert_eq!(fmt_roi_label(20.0, false), "ROI   20%");
+    }
+
+    #[test]
+    fn test_fmt_roi_label_float_consistency() {
+        // 先鎖定兩位，再強迫格式化補滿固定寬度
+        assert_eq!(fmt_roi_label(8.5, true), "ROI 8.50%");
+        assert_eq!(fmt_roi_label(12.5, true), "ROI 12.5%"); // 關鍵：不應截斷
+        assert_eq!(fmt_roi_label(0.0, true), "ROI 0.00%");
+        assert_eq!(fmt_roi_label(-5.5, true), "ROI -5.5%");
+    }
+
+    // =====================================================================
+    // # 11. 新增測試 — ChartInput 方法
+    // =====================================================================
+
+    #[test]
+    fn test_chart_input_anchor_roi_fallback() {
+        let ci_none = ChartInput {
+            start_age: 30,
+            total_years: 10,
+            hist_years: 0,
+            h_inv: 10_000.0,
+            anchor_roi_pct: None, // 未設定時應 fallback 到 7.0
+            lump_sum: 0.0,
+            f_inv: 0.0,
+            inflation_rate: 0,
+            window_width: 1920,
+        };
+        assert_eq!(ci_none.anchor_roi_pct(), 7.0);
+
+        let ci_some = ChartInput {
+            anchor_roi_pct: Some(12.5),
+            ..ci_none
+        };
+        assert_eq!(ci_some.anchor_roi_pct(), 12.5);
+    }
+
+    #[test]
+    fn test_chart_input_h_inv_sum() {
+        let ci = ChartInput {
+            start_age: 25,
+            total_years: 20,
+            hist_years: 5, // 5 * 12 = 60 個月
+            h_inv: 30_000.0,
+            anchor_roi_pct: Some(8.0),
+            lump_sum: 0.0,
+            f_inv: 0.0,
+            inflation_rate: 2,
+            window_width: 1920,
+        };
+        let expected = 30_000.0 * 60.0;
+        assert!(
+            (ci.h_inv_sum() - expected).abs() < f64::EPSILON,
+            "h_inv_sum 應等於 h_inv * hist_months"
+        );
+    }
+
+    // =====================================================================
+    // # 12. 新增測試 — TrendRoute 結構與排序
+    // =====================================================================
+
+    #[test]
+    fn test_trend_route_exactly_one_anchor() {
+        let trends = calculate_true_pivot_trends(20_000.0, 0.0, 7.0, 0, 5, 20, 1_000_000.0);
+        // 恰好整數（7.0%）：anchor 和整數線重合，總共仍是 22 條（7.0 不在 0..=20 的 key 裡）
+        // 只需確保 is_anchor 旗標恰好一條
+        let anchor_count = trends.iter().filter(|r| r.is_anchor).count();
+        assert_eq!(
+            anchor_count, 1,
+            "任何情況下應恰好有且僅有 1 條 is_anchor 線"
+        );
+    }
+
+    #[test]
+    fn test_trend_route_integer_anchor_deduplication() {
+        // 整數 ROI（如 10.0%）應被 HashMap 去重，不重複計算
+        let trends = calculate_true_pivot_trends(10_000.0, 0.0, 10.0, 2, 5, 15, 500_000.0);
+        // 10.0% 是整數，所以 key=10000 對應同一條，總共仍 21 條而不是 22
+        assert_eq!(
+            trends.len(),
+            21,
+            "anchor_roi_pct 為整數時應去重，結果應仍為 21 條"
+        );
+        let anchor_count = trends.iter().filter(|r| r.is_anchor).count();
+        assert_eq!(anchor_count, 1);
+    }
+
+    #[test]
+    fn test_trend_route_sorted_ascending() {
+        let trends = calculate_true_pivot_trends(30_000.0, -10_000.0, 8.37, 3, 10, 30, 3_000_000.0);
+        // 所有 roi_pct 應嚴格遞增排序
+        for w in trends.windows(2) {
+            assert!(
+                w[0].roi_pct <= w[1].roi_pct,
+                "排序應遞增：{} <= {} 失敗",
+                w[0].roi_pct,
+                w[1].roi_pct
+            );
+        }
+    }
+
+    // =====================================================================
+    // # 13. 新增測試 — 提領耗盡場景
+    // =====================================================================
+
+    /// 大量提領：資產應在模擬期間某個時間點降到 0 以下
+    #[test]
+    fn test_withdrawal_depletion_scenario() {
+        // 起始 100 萬，每月提領 5 萬（實質），報酬 5%
+        let lump_sum = 1_000_000.0;
+        let f_inv = -50_000.0;
+        let hist_years = 0;
+        let total_years = 5;
+
+        let trends =
+            calculate_true_pivot_trends(0.0, f_inv, 5.0, 0, hist_years, total_years, lump_sum);
+
+        let anchor = trends.iter().find(|r| r.is_anchor).unwrap();
+        let final_val = anchor.data[total_years * 12].0;
+
+        assert!(
+            final_val < 0.0,
+            "大量提領下 5 年後資產應耗盡（終值 {}），以確保耗盡邏輯運作正常",
+            final_val
+        );
+    }
+
+    /// 小量提領：充足資產 + 高報酬 → 即使提領，資產仍持續成長
+    #[test]
+    fn test_small_withdrawal_still_grows() {
+        // 起始 1000 萬，每月提領 1 萬，報酬 12%
+        let lump_sum = 10_000_000.0;
+        let f_inv = -10_000.0;
+
+        let trends = calculate_true_pivot_trends(0.0, f_inv, 12.0, 0, 0, 10, lump_sum);
+
+        let anchor = trends.iter().find(|r| r.is_anchor).unwrap();
+        let final_val = anchor.data[10 * 12].0;
+
+        assert!(
+            final_val > lump_sum,
+            "充足資產 + 高報酬下，小量提領後 10 年資產應仍成長（終值 {}）",
+            final_val
+        );
+    }
+
+    // =====================================================================
+    // # 14. 新增測試 — format_twd_financial 邊界案例
+    // =====================================================================
+
+    /// 恰好 10,000 元的邊界
+    #[test]
+    fn test_format_twd_exactly_ten_thousand() {
+        assert_eq!(format_twd_financial(10_000.0), "1萬");
+    }
+
+    /// 恰好 100,000,000 元的億級邊界
+    #[test]
+    fn test_format_twd_exactly_one_hundred_million() {
+        assert_eq!(format_twd_financial(100_000_000.0), "1.0億");
+    }
+
+    /// 9,999 元應屬於「元」級，不跨越萬
+    #[test]
+    fn test_format_twd_just_below_ten_thousand() {
+        assert_eq!(format_twd_financial(9_999.0), "9,999元");
+    }
+
+    /// 負值應正確帶負號，且選擇正確的單位
+    #[test]
+    fn test_format_twd_negative_values() {
+        assert_eq!(format_twd_financial(-50_000.0), "-5萬");
+        assert_eq!(format_twd_financial(-100_000_000.0), "-1.0億");
     }
 }
