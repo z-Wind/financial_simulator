@@ -4,7 +4,6 @@
 :root {
   --bg-primary: #0F172A;
   --bg-secondary: #1E293B;
-  --bg-input: #334155;
   --border-color: #475569;
   --border-color-hover: #64748B;
   --text-primary: #F8FAFC;
@@ -32,7 +31,6 @@ body {
 .app-container {
   min-height: 100vh;
   padding: clamp(12px, 3vw, 20px);
-  /* 隨螢幕大小自適應留白 */
   background-color: var(--bg-primary);
   color: var(--text-primary);
   font-family: var(--font-family);
@@ -49,7 +47,7 @@ body {
 }
 
 /* =====================================================================
-   # 2. CONTROLS PANEL (全域與基礎桌面端佈局)
+   # 2. CONTROLS PANEL
    ===================================================================== */
 .controls-panel {
   margin-bottom: 16px;
@@ -122,7 +120,7 @@ body {
 
 .controls-summary:active .panel-status-badge {
   transform: scale(0.96);
-  /* 按下時的物理下沉回饋 */
+
 }
 
 .controls-body {
@@ -130,7 +128,7 @@ body {
 }
 
 /* =====================================================================
-   # 3. CORE UI COMPONENTS (表單、輸入框、客製化下拉、Toggle)
+   # 3. FORM CONTROLS
    ===================================================================== */
 .controls-grid {
   display: grid;
@@ -184,7 +182,6 @@ body {
   border-color: var(--border-color-hover);
 }
 
-/* 鍵盤 Focus 或點擊選單時的戰略發光效果 */
 .control-select:focus-visible {
   border-color: var(--accent-red);
   box-shadow: 0 0 0 3px rgba(244, 63, 94, 0.25);
@@ -192,10 +189,9 @@ body {
 }
 
 /* =====================================================================
-   # 4.5. 新 UI 元件：摘要卡、數字輸入、提示、Toggle
+   # 4. SUMMARY CARD, INPUTS & TOGGLE
    ===================================================================== */
 
-/* 情境摘要卡片 */
 .summary-card {
   background: rgba(45, 212, 191, 0.05);
   border: 1px solid rgba(45, 212, 191, 0.18);
@@ -254,7 +250,6 @@ body {
   cursor: not-allowed;
 }
 
-/* 輸入提示文字 */
 .input-hint {
   margin-top: 5px;
   font-size: 0.75rem;
@@ -287,7 +282,6 @@ body {
   font-size: 0.875rem;
   font-family: var(--font-family);
   cursor: pointer;
-  border-radius: 6px;
   transition: var(--transition-smooth);
 }
 
@@ -318,7 +312,6 @@ body {
   margin-top: 8px;
 }
 
-/* 未來計畫 Row：toggle(2x 寬) + 通膨率(1x) */
 .controls-grid-future {
   display: grid;
   grid-template-columns: 2fr 1fr;
@@ -332,7 +325,7 @@ body {
 }
 
 /* =====================================================================
-   # 5. GRAPH COMPONENTS (圖表外圍組件與底部提示)
+   # 5. CHART AREA & FOOTER
    ===================================================================== */
 .chart-header {
   display: flex;
@@ -379,7 +372,6 @@ body {
   background: linear-gradient(135deg, rgba(45, 212, 191, 0.06) 0%, rgba(15, 23, 42, 0.4) 100%);
   border: 1px solid rgba(45, 212, 191, 0.05);
   border-left: 4px solid var(--emerald);
-  /* 用翡翠綠左邊框引導視覺焦點 */
   border-top: 1px solid rgba(45, 212, 191, 0.1);
   border-radius: 4px;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
@@ -395,18 +387,16 @@ body {
 
 .note-item b {
   color: var(--emerald);
-  /* 高亮「導航小提示：」 */
   font-weight: 600;
 }
 
 /* =====================================================================
-   # 6. RWD RESPONSIVE BREAKPOINTS (行動裝置與手機橫放極限優化)
+   # 6. RESPONSIVE BREAKPOINTS
    ===================================================================== */
 
-/* 📱 手機直向模式 (螢幕寬度 ≤ 640px) ── 全功能懸浮彈窗修正 */
+/* 手機直向（寬度 ≤ 640px）*/
 @media (max-width: 640px) {
 
-  /* 1. 全域容器留白與大標題 */
   .app-container {
     padding: 10px 12px;
   }
@@ -416,7 +406,6 @@ body {
     margin-bottom: 12px;
   }
 
-  /* 2. 解除全域 overflow: hidden 的阻擋，並啟動 sticky 漂浮 */
   .controls-panel {
     position: sticky;
     top: 10px;
@@ -424,11 +413,9 @@ body {
     border: none;
     background: none;
     margin-bottom: 14px;
-    /* 🌟 強制覆蓋全域的裁切，允許內層絕對定位彈出 */
-    overflow: visible;
+      overflow: visible;
   }
 
-  /* 3. ⚙️ 按鈕本體設定 */
   .controls-summary {
     width: 100%;
     background: #1E293B;
@@ -448,7 +435,6 @@ body {
     font-size: 0.75rem;
   }
 
-  /* 4. 🌟 終極修正：將展開面板改為全功能懸浮窗，並加入極致滾動防護 */
   .controls-body {
     position: absolute;
     left: 0;
@@ -472,8 +458,7 @@ body {
   .control-label {
     margin-bottom: 6px;
     min-height: auto;
-    /* 手機端單欄不需要強迫對齊線高度 */
-  }
+    }
 
   .controls-grid-future {
     grid-template-columns: 1fr;
@@ -485,14 +470,13 @@ body {
     gap: 4px;
   }
 
-  /* 圖表降級層級，安心在底下鋪墊 */
   .graph-container {
     position: relative;
     z-index: 1;
   }
 }
 
-/* 🚨 老舊小螢幕手機 (螢幕寬度 ≤ 400px) */
+/* 極小手機（寬度 ≤ 400px）*/
 @media (max-width: 400px) {
   .controls-grid {
     grid-template-columns: 1fr;
@@ -503,9 +487,7 @@ body {
   }
 }
 
-/* =====================================================================
-   # 6. 🔄 手機橫放模式 (LANDSCAPE BREAKPOINT) ── ⚡ 解鎖滾動條、拒絕凍結
-   ===================================================================== */
+/* 手機橫放（高度 ≤ 480px，landscape）*/
 @media (max-height: 480px) and (orientation: landscape) {
   .app-container {
     padding: 8px 16px;
@@ -557,7 +539,6 @@ body {
     font-size: 0.8rem;
   }
 
-  /* 財務提示詞微縮歸位 */
   .input-hint {
     display: block;
     margin-top: 2px;

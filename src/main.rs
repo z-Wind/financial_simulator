@@ -116,10 +116,11 @@ fn infer_roi_pct(current_asset: f64, h_inv: f64, hist_months: usize) -> Option<f
     }
 }
 
-/// 將 ROI 數值格式化為固定欄寬的對齊標籤字串。
+/// 格式化 ROI 為固定欄寬標籤，用於 hover tooltip 與圖例對齊。
 ///
-/// - 整數 ROI（例如 5、10、20）：`"ROI  5%"` / `"ROI 20%"`（右對齊到 4 位）
-/// - 主線 ROI（例如 8.5）：`"ROI 8.50%"`（固定顯示 4 個字 但進位 2 位小數）
+/// - `is_major = false`（整數線）：`{:4}` 右對齊 4 位 → `"ROI    5%"` / `"ROI   20%"`
+/// - `is_major = true`（主線）：先 `{:.2}` 補零、再 `{:.4}` 截 4 字元
+///   → `"ROI 8.50%"` / `"ROI 12.5%"`（>10% 截末尾零以維持欄寬一致）
 fn fmt_roi_label(roi_pct: f64, is_major: bool) -> String {
     if is_major {
         format!("ROI {:.4}%", format!("{:.2}", roi_pct))
@@ -161,16 +162,16 @@ fn format_with_commas(val: f64, precision: usize) -> String {
 fn format_twd_financial(val: f64) -> String {
     let abs_val = val.abs();
 
-    // 🎯 只有當物理數值「真正突破或等於一億（100,000,000）」時，才放行至億的分支
+    // >= 1億
     if abs_val >= 100_000_000.0 {
         format!("{}億", format_with_commas(val / 100_000_000.0, 1))
     }
-    // 🎯 只要不到一億，哪怕是 99,999,999 元，也老老實實用「萬」呈現，保留完整細節
+    // >= 1萬
     else if abs_val >= 10_000.0 {
         let val_in_wan = val / 10_000.0;
         let abs_wan = val_in_wan.abs();
 
-        // 檢查是不是刚好整除（例如 500.0 萬則顯示 500 萬，500.5 萬則顯示 500.5 萬）
+        // 整萬顯示整數，否則顯示一位小數
         let is_round = (abs_wan - abs_wan.round()).abs() < 0.01;
         if is_round {
             format!("{}萬", format_with_commas(val_in_wan, 0))
@@ -178,7 +179,7 @@ fn format_twd_financial(val: f64) -> String {
             format!("{}萬", format_with_commas(val_in_wan, 1))
         }
     }
-    // 🎯 低於一萬，直接顯示千分位整數
+    // < 1萬：直接顯示千分位整數
     else {
         format!("{}元", format_with_commas(val, 0))
     }
@@ -243,7 +244,7 @@ fn calculate_true_pivot_trends(
     let anchor_monthly_rate = (1.0 + (anchor_roi_pct / 100.0)).powf(1.0 / 12.0) - 1.0;
     let inflation_monthly_rate = (1.0 + (inflation_rate as f64) / 100.0).powf(1.0 / 12.0) - 1.0;
 
-    // ─── 1. 真實歷史區間動態模擬 ───
+    // 1. 歷史階段
     let mut hist_route = Vec::with_capacity(hist_months + 1);
 
     if hist_months == 0 {
@@ -256,7 +257,7 @@ fn calculate_true_pivot_trends(
             hist_route.push((curr_balance, curr_balance));
         }
 
-        // 🎯 物理鎖定：歷史最後一格強制等於現有資產
+        // 末點鎖定為使用者輸入的現有資產
         if let Some(last_node) = hist_route.last_mut() {
             *last_node = (lump_sum, lump_sum);
         }
@@ -264,24 +265,22 @@ fn calculate_true_pivot_trends(
 
     let initial_asset = hist_route.last().map(|&(_, real)| real).unwrap_or(0.0);
 
-    // ─── 2. 收集所有需要計算的年化報酬率 ───
-    // 使用 HashMap 除去重複值，避免當 anchor_roi_pct 剛好是整數時重複計算
+    // 2. 收集所有年化報酬率（HashMap 去重：anchor 為整數時不增加額外軌道）
     let mut target_rois: HashMap<i32, f64> = (0..=20)
         .map(|r| (r * 1000, r as f64)) // 放大 1000 倍作為 Key 規避浮點數 Hash 問題
         .collect();
 
-    // 插入精確的主線 ROI (放大萬倍取整數作為唯一識別 Key，防止微幅抖動)
+    // 主線 ROI 放大 1000 倍取整數作為 key，避免浮點 hash 碰撞
     let anchor_key = (anchor_roi_pct * 1000.0).round() as i32;
     target_rois.insert(anchor_key, anchor_roi_pct);
 
     let mut routes = Vec::with_capacity(target_rois.len());
 
-    // ─── 3. 軌道發散點火模擬 ───
+    // 3. 逐條計算複利軌道
     for (&_key, &roi) in target_rois.iter() {
         let is_anchor = (roi - anchor_roi_pct).abs() < f64::EPSILON;
         let monthly_rate = (1.0 + (roi / 100.0)).powf(1.0 / 12.0) - 1.0;
 
-        // 預先配置完整空間，避免 cloned 之後的 push 再次引發 Reallocation
         let mut full_route = Vec::with_capacity(total_months + 1);
         full_route.extend_from_slice(&hist_route);
 
@@ -291,6 +290,7 @@ fn calculate_true_pivot_trends(
         for _ in 1..=future_months {
             future_inflation_factor *= 1.0 + inflation_monthly_rate;
 
+            // 投入：名目固定；提領：名目隨通膨調整以維持實質購買力
             let actual_nominal_cashflow = if f_inv >= 0.0 {
                 f_inv
             } else {
@@ -314,8 +314,7 @@ fn calculate_true_pivot_trends(
         });
     }
 
-    // ─── 4. 嚴謹排序 ───
-    // 依據年化報酬率由小到大 (0% -> ... -> 20%) 排好，供後端繪圖直接按順序疊加
+    // 4. 依報酬率升序排列
     routes.sort_by(|a, b| {
         a.roi_pct
             .partial_cmp(&b.roi_pct)
@@ -349,8 +348,7 @@ fn get_annotations(
         lump_sum
     };
 
-    // 🎯 核心防禦：將 X 軸標籤定位點從「相對年期」平移為「真實年齡」
-    // Y 軸因為是對數軸 (Log Scale)，其定位數值必須做安全防護，避免負數或零引發 log10() 出錯
+    // X 軸用真實年齡；Y 軸對數軸需設下限（min 1萬）防止 log(0)
     let (x_pos, y_val_log, text_str, show_arrow, ax, ay) = if hist_years > 0 {
         let label_text = if let Some(actual_roi) = anchor_roi_pct {
             format!(
@@ -359,7 +357,6 @@ fn get_annotations(
                 format_twd_financial(amt_now)
             )
         } else {
-            // 🎯 若為 None，直接拔除百分比括號，老老實實回歸資產數字，視覺上極度嚴謹
             format!("📍 現況結算: {}", format_twd_financial(amt_now))
         };
 
@@ -424,20 +421,20 @@ fn generate_plot(ci: ChartInput, sorted_trends: Vec<TrendRoute>) -> Plot {
     let total_months = ci.total_years * 12;
     let hist_months = ci.hist_years * 12;
 
-    // 建立一組共用的 X 軸數值時間軸（真實歲數）
+    // X 軸以真實年齡為單位，所有 trace 共用同一份資料（Rc 避免複製）
     let x_numeric_timeline: Vec<f64> = (0..=total_months)
         .map(|m| ci.start_age as f64 + (m as f64 / 12.0))
         .collect();
 
     let shared_x = Rc::new(x_numeric_timeline);
 
-    // 預先動態生成 0% 到 20% 基礎色階
+    // 21 條 ROI 線的色階（藍色系漸層）
     let mut colors = Vec::with_capacity(21);
     for i in 0..=20 {
         colors.push(format!("rgba({}, {}, 255, 0.8)", 50 + i * 8, 80 + i * 5));
     }
 
-    // 1. 組裝唯一的主線 Hover 提示文字
+    // 1. 建立 hover tooltip 文字（掛載於主線；其他線設 HoverInfo::Skip）
     let mut hover_labels_text = Vec::with_capacity(shared_x.len());
     for m in 0..=total_months {
         let elapsed_years = m / 12;
@@ -545,11 +542,11 @@ fn generate_plot(ci: ChartInput, sorted_trends: Vec<TrendRoute>) -> Plot {
         };
 
         let width = if route.is_anchor {
-            3.5 // 主線加粗，成為焦點
+            3.5
         } else if is_p {
-            2.0 // 重點提示線
+            2.0
         } else {
-            0.8 // 背景細線
+            0.8
         };
 
         trace = trace
@@ -568,7 +565,7 @@ fn generate_plot(ci: ChartInput, sorted_trends: Vec<TrendRoute>) -> Plot {
         plot.add_trace(trace);
     }
 
-    // 3. 繪製 0% 本金對照虛線
+    // 3. 0% 純本金對照虛線
     if let Some(base_route) = sorted_trends
         .iter()
         .find(|r| !r.is_anchor && (r.roi_pct).abs() < f64::EPSILON)
@@ -714,11 +711,11 @@ fn generate_plot(ci: ChartInput, sorted_trends: Vec<TrendRoute>) -> Plot {
         );
     }
 
-    // 1. 物理視野下限死鎖在 1 萬元，徹底杜絕負數或趨零暴跌把對數軸向下無限扯塌！
+    // Y 軸：對數軸下限固定 1 萬，避免近零值無限下拉
     let visual_floor: f64 = 10_000.0;
-    let y_min_log = visual_floor.log10(); // 順利通過編譯，精確得到 4.0
+    let y_min_log = visual_floor.log10(); // = 4.0
 
-    // 2. 掃描所有軌道中的最高點資產，決定動態頂部視野
+    // Y 軸動態上限：掃描所有軌道最大值
     let mut max_val = 100_000.0;
     for route in sorted_trends.iter() {
         for &(nominal, _) in route.data.iter() {
@@ -728,14 +725,13 @@ fn generate_plot(ci: ChartInput, sorted_trends: Vec<TrendRoute>) -> Plot {
         }
     }
 
-    // 3. 🎯 同步修正：對 1.5 倍的放大常數進行型別與 log10 安全處理
     let y_max_log = if max_val > visual_floor {
         (max_val * 1.5_f64).log10()
     } else {
         5.0 // 最大資產不到 10 萬時，預設給予 10 萬（5.0）的對數上限空間
     };
 
-    // 4. 備妥所有可能橫跨的台灣標準純中文理財對數刻度關卡
+    // Y 軸刻度候選（中文單位，動態篩選落在可視範圍內的）
     let all_potential_ticks: Vec<(f64, &str)> = vec![
         (10_000.0, "1萬"),
         (100_000.0, "10萬"),
@@ -747,20 +743,18 @@ fn generate_plot(ci: ChartInput, sorted_trends: Vec<TrendRoute>) -> Plot {
         (100_000_000_000.0, "1000億"),
     ];
 
-    // 5. 過濾出「真正落在我們設定的動態物理視野範圍內」的中文刻度
     let mut dynamic_y_vals = Vec::new();
     let mut dynamic_y_text = Vec::new();
 
     for (val, text) in all_potential_ticks {
         let val_log = val.log10();
-        // 刻度打點起點嚴格卡在 1 萬（4.0），終點則不能超過當前的最大视野上限
         if val_log >= y_min_log && val_log <= y_max_log + 0.3 {
             dynamic_y_vals.push(val);
             dynamic_y_text.push(text.to_string());
         }
     }
 
-    // ─── 6. 座標軸與圖例配置 ───
+    // 座標軸、圖例
     let x_axis = Axis::new()
         .type_(AxisType::Linear)
         .tick_mode(TickMode::Array)
@@ -860,14 +854,12 @@ fn generate_plot(ci: ChartInput, sorted_trends: Vec<TrendRoute>) -> Plot {
     plot
 }
 
-// ─── 輔助函數：計算終值並生成狀態描述 ──────────────────────────────────
 fn derive_future_summary(
     ci: &ChartInput,
     sorted_trends: &[TrendRoute],
     asset_wan_val: f64,
     future_mode_val: FutureMode,
 ) -> (String, String, String) {
-    // 精確定位主線軌道
     let anchor_route = sorted_trends.iter().find(|route| route.is_anchor);
 
     let total_months = ci.total_years * 12;
@@ -950,11 +942,12 @@ fn derive_future_summary(
 }
 
 // =====================================================================
-// # 7. Leptos 網頁 UI 組件與主入口
+// # 7. UI 組件（Leptos App）
 // =====================================================================
+
 #[component]
 fn App() -> impl IntoView {
-    // ─── 從 localStorage 讀取上次設定（擴大年齡與數值防禦） ───────────────────
+    // 從 localStorage 讀取上次設定
     let init_start_age = ls_usize("fs_start_age", 25).clamp(0, 150);
     let init_current_age = ls_usize("fs_current_age", 38).clamp(init_start_age, 150);
     let init_target_age = ls_usize("fs_target_age", 65).clamp(init_current_age + 1, 150);
@@ -968,7 +961,7 @@ fn App() -> impl IntoView {
         _ => FutureMode::Stop,
     };
 
-    // ─── 核心計算型 Signals ────────────────────────────────────────────
+    // Signals
     let (start_age, set_start_age) = signal(init_start_age);
     let (current_age, set_current_age) = signal(init_current_age);
     let (target_age, set_target_age) = signal(init_target_age);
@@ -979,7 +972,7 @@ fn App() -> impl IntoView {
     let (inflation_rate, set_inflation_rate) = signal(init_inflation);
     let (panel_open, set_panel_open) = signal(true);
 
-    // 🎯 核心 UX 優化：使用非卡死字串型暫存 Signals，讓使用者能流暢倒退修改
+    // 字串暫存 signals：讓使用者打字中途不被卡死（blur 後才做範圍驗證）
     let (start_age_raw, set_start_age_raw) = signal(init_start_age.to_string());
     let (current_age_raw, set_current_age_raw) = signal(init_current_age.to_string());
     let (target_age_raw, set_target_age_raw) = signal(init_target_age.to_string());
@@ -987,19 +980,15 @@ fn App() -> impl IntoView {
     let (asset_wan_raw, set_asset_wan_raw) = signal(init_asset_wan.to_string());
     let (f_inv_k_raw, set_f_inv_k_raw) = signal(init_f_inv_k.to_string());
 
-    // ─── 🎯 衍生計算值（升級為最高級別的防禦性時序約束） ─────────────────────
-
-    // 使用 saturating_sub 確保無論如何相減，最低就是 0，絕不溢出
+    // 衍生計算值
     let hist_years = move || current_age.get().saturating_sub(start_age.get());
     let is_hist_years_active = move || hist_years() > 0 && current_age.get() >= start_age.get();
 
-    // 確保總年期必然大於或等於歷史年期，且不論使用者怎麼填，最低安全值就是 1 年
     let total_years = move || {
         let raw_total = target_age.get().saturating_sub(start_age.get());
         let hy = hist_years();
         if current_age.get() < start_age.get() || target_age.get() <= current_age.get() {
-            // 如果年齡結構發生嚴重的短暫打字矛盾，強迫總年期等於歷史年期（即未來期為 0）
-            hy.max(1)
+            hy.max(1) // 打字中的暫時矛盾：維持最小有效值
         } else {
             raw_total.max(hy).max(1)
         }
@@ -1025,7 +1014,7 @@ fn App() -> impl IntoView {
         FutureMode::Invest => f_inv_k.get() * 1000.0,
         FutureMode::Withdraw => -f_inv_k.get() * 1000.0,
     };
-    // ─── 視窗寬度 signal（響應旋轉與縮放）──────────────────────────
+    // 視窗寬度 signal（響應旋轉 / resize）
     let initial_width: u32 = {
         #[cfg(target_family = "wasm")]
         {
@@ -1058,7 +1047,7 @@ fn App() -> impl IntoView {
         cb.forget();
     }
 
-    // ─── 1. 基礎參數聚合 Memo ───
+    // 1. 聚合所有參數為 ChartInput（Memo 確保只在依賴變動時重算）
     let active_chart_input_memo = Memo::new(move |_| ChartInput {
         start_age: start_age.get(),
         total_years: total_years(),
@@ -1071,11 +1060,10 @@ fn App() -> impl IntoView {
         window_width: window_width.get(),
     });
 
-    // ─── 2. Debounced 接收端信號（控制高頻輸入） ───
+    // 2. 300ms debounce：防止每個字元觸發重算
     let (debounced_chart_input, set_debounced_chart_input) =
         signal(active_chart_input_memo.get_untracked());
 
-    // 精準的 300ms 節流防禦 Effect
     Effect::new(move |_| {
         let new_ci = active_chart_input_memo.get();
         #[cfg(target_family = "wasm")]
@@ -1106,8 +1094,7 @@ fn App() -> impl IntoView {
         }
     });
 
-    // ─── 3. ✨ 核心性能亮點：全系統唯一的複利數據計算源 ✨ ───
-    // 這個 Memo 只監聽 debounced_chart_input，不論下游重複讀取多少次，都只會運算一次
+    // 3. 複利計算快取（只依賴 debounced_chart_input，下游多次讀取不重算）
     let trends_memo = Memo::new(move |_| {
         let ci = debounced_chart_input.get();
         calculate_true_pivot_trends(
@@ -1121,16 +1108,13 @@ fn App() -> impl IntoView {
         )
     });
 
-    // ─── 4. Plot 異步 Resource（修改為直接從共享的 trends_memo 提煉，不再重複計算） ───
+    // 4. 非同步 Plot resource（從快取讀取 trends，不重複計算）
     let plot_resource = LocalResource::new(move || async move {
         let ci = debounced_chart_input.get();
-        let trends = trends_memo.get(); // 👈 直接從緩存獲取，速度極快
-
-        // 呼叫更新後的 generate_plot (我們將在下一段重構 generate_plot)
+        let trends = trends_memo.get();
         generate_plot(ci, trends)
     });
 
-    // ─── Effects ────────────────────────────────────────────────────
     Effect::new(move |_| {
         if let Some(p) = plot_resource.get() {
             #[cfg(target_family = "wasm")]
@@ -1161,7 +1145,7 @@ fn App() -> impl IntoView {
         }
     });
 
-    // ─── 儲存設定到 localStorage ────────────────────────────────────
+    // 儲存設定到 localStorage（任一值改變時觸發）
     Effect::new(move |_| {
         ls_set("fs_start_age", &start_age.get().to_string());
         ls_set("fs_current_age", &current_age.get().to_string());
@@ -1184,7 +1168,6 @@ fn App() -> impl IntoView {
         <div class="app-container">
             <h2 class="app-title">"人生財務戰略導航：現況資產錨定與未來變革推演模擬器"</h2>
 
-            // ── 控制面板外框 ───────────────────────────────────────────
             <div class=move || if panel_open.get() { "controls-panel panel-open" } else { "controls-panel" }>
                 <button class="controls-summary" on:click=move |_| set_panel_open.update(|v| *v = !*v)>
                     <span class="summary-title">"⚙️ 模擬參數設定"</span>
@@ -1196,10 +1179,9 @@ fn App() -> impl IntoView {
                 <Show when=move || panel_open.get()>
                     <div class="controls-body">
 
-                        // ── Row 1：基本年齡資料資料與歷史投入 ──
+                        // Row 1：年齡與歷史投入
                         <div class="controls-grid">
 
-                            // 1. 開始投資年齡
                             <div class="control-group">
                                 <label class="control-label">"🗓️ 一：開始投資年齡（歲）"</label>
                                 <input type="number" class="number-input"
@@ -1207,13 +1189,12 @@ fn App() -> impl IntoView {
                                     prop:value=move || start_age_raw.get()
                                     on:input=move |ev| {
                                         let val = event_target_value(&ev);
-                                        set_start_age_raw.set(val.clone()); // 打字時只更新字串暫存，絕不卡手
+                                        set_start_age_raw.set(val.clone());
                                         if let Ok(v) = val.parse::<usize>() {
-                                            set_start_age.set(v); // 背景靜態更新數值
+                                            set_start_age.set(v);
                                         }
                                     }
                                     on:blur=move |_| {
-                                        // 焦點移開時才執行全套防禦性約束與強制洗回
                                         let v = start_age.get().clamp(0, 150);
                                         set_start_age.set(v);
                                         set_start_age_raw.set(v.to_string());
@@ -1235,7 +1216,6 @@ fn App() -> impl IntoView {
                                 }}</div>
                             </div>
 
-                            // 2. 目前年齡
                             <div class="control-group">
                                 <label class="control-label">"🎂 二：目前年齡（歲）"</label>
                                 <input type="number" class="number-input"
@@ -1265,7 +1245,6 @@ fn App() -> impl IntoView {
                                 }}</div>
                             </div>
 
-                            // 3. 目標年齡
                             <div class="control-group">
                                 <label class="control-label">"🏁 三：目標年齡（歲）"</label>
                                 <input type="number" class="number-input"
@@ -1287,7 +1266,6 @@ fn App() -> impl IntoView {
                                 <div class="input-hint">{move || format!("共模擬 {} 年", total_years())}</div>
                             </div>
 
-                            // 4. 歷史每月投入
                             <Show when=move || is_hist_years_active()>
                                 <div class="control-group">
                                     <label class="control-label">"💰 四：歷史每月投入（千元）"</label>
@@ -1310,7 +1288,6 @@ fn App() -> impl IntoView {
                                     <div class="input-hint">{move || format!("= {} 共投入 {}", format_twd_financial(h_inv()), format_twd_financial(h_inv_sum()))}</div>
                                 </div>
                             </Show>
-                            // 5. 現有資產 / 起始資金（動態標籤，不允許負數）
                             <div class="control-group">
                                 <label class="control-label">
                                     {move || if hist_years() > 0 {
@@ -1320,19 +1297,17 @@ fn App() -> impl IntoView {
                                     }}
                                 </label>
                                 <input type="number" class="number-input"
-                                    min="0" // 透過瀏覽器原生屬性暗示不接受負數
+                                    min="0"
                                     step="1" inputmode="decimal"
                                     prop:value=move || asset_wan_raw.get()
                                     on:input=move |ev| {
                                         let val = event_target_value(&ev);
                                         set_asset_wan_raw.set(val.clone());
                                         if let Ok(v) = val.parse::<f64>() {
-                                            // 打字時如果輸入負數，背景悄悄將計算核心截斷為 0.0，維持圖表不破版
                                             set_asset_wan.set(v.max(0.0));
                                         }
                                     }
                                     on:blur=move |_| {
-                                        // 當使用者滑鼠移開欄位時，強制把小於 0 的不合法輸入文字清洗成 "0"
                                         let v = asset_wan.get().max(0.0);
                                         set_asset_wan.set(v);
                                         set_asset_wan_raw.set(v.to_string());
@@ -1368,10 +1343,9 @@ fn App() -> impl IntoView {
                             </div>
                         </div>
 
-                        // ── Row 2：未來計畫 + 通膨率 ──
+                        // Row 2：未來計畫與通膨率
                         <div class="controls-grid controls-grid-future">
 
-                            // 6. 未來計畫（🎯 已精確修正：補足「千元」語意標籤與提示）
                             <div class="control-group control-group-wide">
                                 <label class="control-label">
                                     {move || if hist_years() > 0 { "🔵 六：未來計畫金額（千元）" } else { "🔵 五：未來計畫金額（千元）" }}
@@ -1420,7 +1394,6 @@ fn App() -> impl IntoView {
                                 </Show>
                             </div>
 
-                            // 7. 通膨率
                             <div class="control-group">
                                 <label class="control-label">
                                     {move || if hist_years() > 0 { "📉 七：未來通膨率" } else { "📉 六：未來通膨率" }}
@@ -1441,7 +1414,6 @@ fn App() -> impl IntoView {
                     </div>
                 </Show>
             </div>
-            // ── 情境摘要卡片（重構後：邏輯清晰、極易讀） ───────────────────
             <div class="summary-card">
                 {move || {
                     let ci = debounced_chart_input.get();
@@ -1456,7 +1428,7 @@ fn App() -> impl IntoView {
                     let roi = ci.anchor_roi_pct();
 
                     match (ci.hist_years, ci.lump_sum == 0.0) {
-                        // 情境 A：白手起家（無歷史、無起始本金 ── 隱含報酬率必為 None）
+                        // 情境 A：無歷史、無起始本金
                         (0, true) => {
                             let intro = if sage == 0 { "👶 幫新生兒從 0 歲白手起家 — " } else { "📊 規劃從 " };
                             view! { <span class="summary-text">
@@ -1466,7 +1438,7 @@ fn App() -> impl IntoView {
                             </span> }.into_any()
                         },
 
-                        // 情境 B：單純單筆配置（無歷史、有起始本金 ── 隱含報酬率必為 None）
+                        // 情境 B：無歷史、有起始本金（單筆配置）
                         (0, false) => {
                             let intro = if sage == 0 { "👶 幫小孩從 0 歲配置 — " } else { "💰 規劃從 " };
                             let ls_desc = format!("起始本金 <strong>{}</strong>", format_twd_financial(ci.lump_sum));
@@ -1477,7 +1449,7 @@ fn App() -> impl IntoView {
                             </span> }.into_any()
                         },
 
-                        // 情境 C：已有過去投資歷史（區分真實算出與 None 的歷史情境）
+                        // 情境 C：有歷史投資記錄
                         (_hist, _) => {
                             let strategy_desc = if ci.anchor_roi_pct.is_some() {
                                 format!("。延續此回報率並調整戰略為：{future_desc}，期望在 ", )
@@ -1495,7 +1467,6 @@ fn App() -> impl IntoView {
                     }
                 }}
             </div>
-            // ── 截圖按鈕 ─────────────────────────────────────────────
             <div class="chart-header">
                 <button class="screenshot-btn" title="下載圖表 PNG（1920×1080）"
                     on:click=move |_| {
@@ -1505,12 +1476,10 @@ fn App() -> impl IntoView {
                 >"📷 截圖"</button>
             </div>
 
-            // ── 圖表 ─────────────────────────────────────────────────
             <div id="financial-graph" class="graph-container"
                 style=move || if panel_open.get() { "height: clamp(520px, 68vh, 720px);" } else { "height: clamp(520px, 82vh, 860px);" }
             ></div>
 
-            // ── 底部說明 ──────────────────────────────────────────────
             <div class="chart-footer-notes">
                 <p class="note-item">
                     "💡 " <b>"導航小提示："</b>
@@ -1522,8 +1491,9 @@ fn App() -> impl IntoView {
 }
 
 // =====================================================================
-// # 8. Wasm 應用程式主進入點 (Client-Side Rendering)
+// # 8. 應用程式進入點
 // =====================================================================
+
 fn main() {
     _ = console_log::init_with_level(log::Level::Debug);
     console_error_panic_hook::set_once();
