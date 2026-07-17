@@ -13,6 +13,52 @@ use std::rc::Rc;
 use wasm_bindgen::JsCast;
 
 // =====================================================================
+// # -1. 全域常數設定（可視化門檻、UX 判斷邊界、localStorage key 等）
+// =====================================================================
+
+/// 使用者未輸入歷史資產時，系統假設的預設年化報酬率基準。
+const DEFAULT_ANCHOR_ROI_PCT: f64 = 7.0;
+
+/// 視窗寬度小於此值時，切換為窄版排版（精簡圖例/文字）。
+const NARROW_WIDTH_BREAKPOINT: u32 = 640;
+
+/// 使用者輸入變動後，延遲多久才觸發重新計算/繪圖（避免每個字元都重算）。
+#[cfg(target_family = "wasm")]
+const DEBOUNCE_MS: i32 = 300;
+
+/// Y 軸（對數座標）視覺下限：低於此金額一律顯示在 1 萬的位置，避免 log(0) 爆炸。
+const CHART_Y_VISUAL_FLOOR: f64 = 10_000.0;
+
+/// 所有軌道資產都不到視覺下限時，預設給的可視上限（10 萬）。
+const CHART_Y_DEFAULT_MAX: f64 = 100_000.0;
+
+/// Y 軸上限抓「資料最大值」再乘上的留白倍數。
+const CHART_Y_HEADROOM_MULTIPLIER: f64 = 1.5;
+
+/// 資產規模均未超過視覺下限時，Y 軸對數上限的預設值（= log10(10 萬)）。
+const CHART_Y_DEFAULT_LOG_MAX: f64 = 5.0;
+
+/// 由現有資產反推隱含年化報酬率時，視為「合理範圍」的上下界；超出此範圍會在 UI 顯示警告。
+const ROI_WARNING_MIN: f64 = -25.0;
+const ROI_WARNING_MAX: f64 = 25.0;
+
+/// 輸入框單位換算：使用者以「千元」輸入的欄位（h_inv_k / f_inv_k）換算成元。
+const THOUSAND_TO_TWD: f64 = 1_000.0;
+
+/// 輸入框單位換算：使用者以「萬元」輸入的欄位（asset_wan）換算成元。
+const WAN_TO_TWD: f64 = 10_000.0;
+
+/// localStorage 持久化欄位 key（集中管理，避免讀取/寫入兩處字串打錯導致對不上）。
+const LS_KEY_START_AGE: &str = "fs_start_age";
+const LS_KEY_CURRENT_AGE: &str = "fs_current_age";
+const LS_KEY_TARGET_AGE: &str = "fs_target_age";
+const LS_KEY_H_INV_K: &str = "fs_h_inv_k";
+const LS_KEY_ASSET_WAN: &str = "fs_asset_wan";
+const LS_KEY_F_INV_K: &str = "fs_f_inv_k";
+const LS_KEY_INFLATION: &str = "fs_inflation";
+const LS_KEY_FUTURE_MODE: &str = "fs_future_mode";
+
+// =====================================================================
 // # 0. 全域狀態型別定義
 // =====================================================================
 
@@ -38,7 +84,7 @@ struct ChartInput {
 
 impl ChartInput {
     fn anchor_roi_pct(&self) -> f64 {
-        self.anchor_roi_pct.unwrap_or(7.0)
+        self.anchor_roi_pct.unwrap_or(DEFAULT_ANCHOR_ROI_PCT)
     }
 
     fn h_inv_sum(&self) -> f64 {
@@ -362,21 +408,19 @@ fn get_annotations(
 
         (
             (start_age + hist_years) as f64,
-            amt_now.max(10000.0).log10(), // 強制限低防禦對數軸爆炸
+            amt_now.max(CHART_Y_VISUAL_FLOOR).log10(), // 強制限低防禦對數軸爆炸
             label_text,
             true,
             0.0,
             60.0,
         )
-    } else if lump_sum.abs() > 0.0 {
+    } else if lump_sum > 0.0 {
+        // 註：UI 層已保證 lump_sum ≥ 0（負債起步會讓 ROI 反推與後續模擬失真，
+        // 故不開放輸入負值），此處不需再處理負數分支。
         (
             start_age as f64,
-            lump_sum.abs().max(10000.0).log10(),
-            if lump_sum >= 0.0 {
-                format!("💰 起始資金: {}", format_twd_financial(lump_sum))
-            } else {
-                format!("⚠️ 起始負債: {}", format_twd_financial(lump_sum.abs()))
-            },
+            lump_sum.max(CHART_Y_VISUAL_FLOOR).log10(),
+            format!("💰 起始資金: {}", format_twd_financial(lump_sum)),
             true,
             0.0,
             60.0,
@@ -416,7 +460,7 @@ fn get_annotations(
 // # 6. 全自動響應式圖表引擎（前半段：數據流與線條配置）
 // =====================================================================
 fn generate_plot(ci: ChartInput, sorted_trends: Vec<TrendRoute>) -> Plot {
-    let is_narrow = ci.window_width < 640;
+    let is_narrow = ci.window_width < NARROW_WIDTH_BREAKPOINT;
     let is_inflation = ci.inflation_rate > 0;
     let total_months = ci.total_years * 12;
     let hist_months = ci.hist_years * 12;
@@ -712,11 +756,11 @@ fn generate_plot(ci: ChartInput, sorted_trends: Vec<TrendRoute>) -> Plot {
     }
 
     // Y 軸：對數軸下限固定 1 萬，避免近零值無限下拉
-    let visual_floor: f64 = 10_000.0;
+    let visual_floor: f64 = CHART_Y_VISUAL_FLOOR;
     let y_min_log = visual_floor.log10(); // = 4.0
 
     // Y 軸動態上限：掃描所有軌道最大值
-    let mut max_val = 100_000.0;
+    let mut max_val = CHART_Y_DEFAULT_MAX;
     for route in sorted_trends.iter() {
         for &(nominal, _) in route.data.iter() {
             if nominal > max_val {
@@ -726,9 +770,9 @@ fn generate_plot(ci: ChartInput, sorted_trends: Vec<TrendRoute>) -> Plot {
     }
 
     let y_max_log = if max_val > visual_floor {
-        (max_val * 1.5_f64).log10()
+        (max_val * CHART_Y_HEADROOM_MULTIPLIER).log10()
     } else {
-        5.0 // 最大資產不到 10 萬時，預設給予 10 萬（5.0）的對數上限空間
+        CHART_Y_DEFAULT_LOG_MAX // 最大資產不到 10 萬時，預設給予 10 萬（5.0）的對數上限空間
     };
 
     // Y 軸刻度候選（中文單位，動態篩選落在可視範圍內的）
@@ -916,7 +960,7 @@ fn derive_future_summary(
         )
     };
 
-    let av = asset_wan_val * 10_000.0;
+    let av = asset_wan_val * WAN_TO_TWD;
     let roi_info = if av != 0.0 {
         if let Some(actual_roi) = ci.anchor_roi_pct {
             let roi_style = if actual_roi < 0.0 {
@@ -948,14 +992,14 @@ fn derive_future_summary(
 #[component]
 fn App() -> impl IntoView {
     // 從 localStorage 讀取上次設定
-    let init_start_age = ls_usize("fs_start_age", 25).clamp(0, 150);
-    let init_current_age = ls_usize("fs_current_age", 38).clamp(init_start_age, 150);
-    let init_target_age = ls_usize("fs_target_age", 65).clamp(init_current_age + 1, 150);
-    let init_h_inv_k = ls_f64("fs_h_inv_k", 30.0).max(0.0);
-    let init_asset_wan = ls_f64("fs_asset_wan", 0.0).max(0.0);
-    let init_f_inv_k = ls_f64("fs_f_inv_k", 0.0).max(0.0);
-    let init_inflation = ls_usize("fs_inflation", 2).min(6);
-    let init_future_mode = match ls_str("fs_future_mode", "stop").as_str() {
+    let init_start_age = ls_usize(LS_KEY_START_AGE, 25).clamp(0, 150);
+    let init_current_age = ls_usize(LS_KEY_CURRENT_AGE, 38).clamp(init_start_age, 150);
+    let init_target_age = ls_usize(LS_KEY_TARGET_AGE, 65).clamp(init_current_age + 1, 150);
+    let init_h_inv_k = ls_f64(LS_KEY_H_INV_K, 30.0).max(0.0);
+    let init_asset_wan = ls_f64(LS_KEY_ASSET_WAN, 0.0).max(0.0);
+    let init_f_inv_k = ls_f64(LS_KEY_F_INV_K, 0.0).max(0.0);
+    let init_inflation = ls_usize(LS_KEY_INFLATION, 2).min(6);
+    let init_future_mode = match ls_str(LS_KEY_FUTURE_MODE, "stop").as_str() {
         "invest" => FutureMode::Invest,
         "withdraw" => FutureMode::Withdraw,
         _ => FutureMode::Stop,
@@ -994,9 +1038,9 @@ fn App() -> impl IntoView {
         }
     };
 
-    let h_inv = move || h_inv_k.get() * 1000.0;
+    let h_inv = move || h_inv_k.get() * THOUSAND_TO_TWD;
     let h_inv_sum = move || h_inv() * (hist_years() * 12) as f64;
-    let current_asset = move || asset_wan.get() * 10_000.0;
+    let current_asset = move || asset_wan.get() * WAN_TO_TWD;
 
     let lump_sum = move || current_asset();
 
@@ -1011,8 +1055,8 @@ fn App() -> impl IntoView {
 
     let f_inv = move || match future_mode.get() {
         FutureMode::Stop => 0.0,
-        FutureMode::Invest => f_inv_k.get() * 1000.0,
-        FutureMode::Withdraw => -f_inv_k.get() * 1000.0,
+        FutureMode::Invest => f_inv_k.get() * THOUSAND_TO_TWD,
+        FutureMode::Withdraw => -f_inv_k.get() * THOUSAND_TO_TWD,
     };
     // 視窗寬度 signal（響應旋轉 / resize）
     let initial_width: u32 = {
@@ -1080,7 +1124,7 @@ fn App() -> impl IntoView {
                     let new_id = w
                         .set_timeout_with_callback_and_timeout_and_arguments_0(
                             cb.as_ref().unchecked_ref(),
-                            300,
+                            DEBOUNCE_MS,
                         )
                         .unwrap_or(-1);
                     cb.forget();
@@ -1147,15 +1191,15 @@ fn App() -> impl IntoView {
 
     // 儲存設定到 localStorage（任一值改變時觸發）
     Effect::new(move |_| {
-        ls_set("fs_start_age", &start_age.get().to_string());
-        ls_set("fs_current_age", &current_age.get().to_string());
-        ls_set("fs_target_age", &target_age.get().to_string());
-        ls_set("fs_h_inv_k", &h_inv_k.get().to_string());
-        ls_set("fs_asset_wan", &asset_wan.get().to_string());
-        ls_set("fs_f_inv_k", &f_inv_k.get().to_string());
-        ls_set("fs_inflation", &inflation_rate.get().to_string());
+        ls_set(LS_KEY_START_AGE, &start_age.get().to_string());
+        ls_set(LS_KEY_CURRENT_AGE, &current_age.get().to_string());
+        ls_set(LS_KEY_TARGET_AGE, &target_age.get().to_string());
+        ls_set(LS_KEY_H_INV_K, &h_inv_k.get().to_string());
+        ls_set(LS_KEY_ASSET_WAN, &asset_wan.get().to_string());
+        ls_set(LS_KEY_F_INV_K, &f_inv_k.get().to_string());
+        ls_set(LS_KEY_INFLATION, &inflation_rate.get().to_string());
         ls_set(
-            "fs_future_mode",
+            LS_KEY_FUTURE_MODE,
             match future_mode.get() {
                 FutureMode::Stop => "stop",
                 FutureMode::Invest => "invest",
@@ -1316,15 +1360,14 @@ fn App() -> impl IntoView {
                                 {move || {
                                     let hy = hist_years();
                                     let av = asset_wan.get();
-                                    let asset_twd = av * 10_000.0;
+                                    let asset_twd = av * WAN_TO_TWD;
 
                                     if hy == 0 {
+                                        // 註：輸入框已限制 av ≥ 0（不開放負債起步），故只需處理 0 / 正值兩種情況
                                         let hint = if av == 0.0 {
                                             "0 = 從零開始（不帶資金）".to_string()
-                                        } else if av > 0.0 {
-                                            format!("= {}，做為複利起始本金", format_twd_financial(asset_twd))
                                         } else {
-                                            format!("= {}，帶負債起步", format_twd_financial(asset_twd.abs()))
+                                            format!("= {}，做為複利起始本金", format_twd_financial(asset_twd))
                                         };
                                         view! { <div class="input-hint">{hint}</div> }.into_any()
                                     } else if av == 0.0 {
@@ -1334,7 +1377,7 @@ fn App() -> impl IntoView {
                                     } else {
                                         match anchor_roi_pct() {
                                             None => view! { <div class="input-hint warning">"⚠️ 無法推估，請確認數字"</div> }.into_any(),
-                                            Some(r) if !(-25.0..=25.0).contains(&r) => view! { <div class="input-hint warning">{format!("🚨 隱含 {:.2}%/年，請確認", r)}</div> }.into_any(),
+                                            Some(r) if !(ROI_WARNING_MIN..=ROI_WARNING_MAX).contains(&r) => view! { <div class="input-hint warning">{format!("🚨 隱含 {:.2}%/年，請確認", r)}</div> }.into_any(),
                                             Some(r) if r < 0.0 => view! { <div class="input-hint warning">{format!("⚠️ 隱含 {:.2}%/年，虧損中", r)}</div> }.into_any(),
                                             Some(r) => view! { <div class="input-hint info">{format!("≈ 年化 {:.2}%", r)}</div> }.into_any(),
                                         }
@@ -1383,7 +1426,7 @@ fn App() -> impl IntoView {
                                             }
                                         />
                                         <div class="input-hint">{move || {
-                                            let amt = format_twd_financial(f_inv_k.get() * 1000.0);
+                                            let amt = format_twd_financial(f_inv_k.get() * THOUSAND_TO_TWD);
                                             match future_mode.get() {
                                                 FutureMode::Invest   => format!("= 未來每月名目投入 {}", amt),
                                                 FutureMode::Withdraw => format!("= 未來每月實質提領 {}", amt),
@@ -2024,7 +2067,7 @@ mod tests {
             inflation_rate: 0,
             window_width: 1920,
         };
-        assert_eq!(ci_none.anchor_roi_pct(), 7.0);
+        assert_eq!(ci_none.anchor_roi_pct(), DEFAULT_ANCHOR_ROI_PCT);
 
         let ci_some = ChartInput {
             anchor_roi_pct: Some(12.5),
