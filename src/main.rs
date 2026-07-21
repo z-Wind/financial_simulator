@@ -16,6 +16,9 @@ use wasm_bindgen::JsCast;
 // # -1. 全域常數設定（可視化門檻、UX 判斷邊界、localStorage key 等）
 // =====================================================================
 
+/// 最大年齡
+const MAX_AGE: usize = 150;
+
 /// 使用者未輸入歷史資產時，系統假設的預設年化報酬率基準。
 const DEFAULT_ANCHOR_ROI_PCT: f64 = 7.0;
 
@@ -164,14 +167,19 @@ fn infer_roi_pct(current_asset: f64, h_inv: f64, hist_months: usize) -> Option<f
 
 /// 格式化 ROI 為固定欄寬標籤，用於 hover tooltip 與圖例對齊。
 ///
-/// - `is_major = false`（整數線）：`{:4}` 右對齊 4 位 → `"ROI    5%"` / `"ROI   20%"`
-/// - `is_major = true`（主線）：先 `{:.2}` 補零、再 `{:.4}` 截 4 字元
-///   → `"ROI 8.50%"` / `"ROI 12.5%"`（>10% 截末尾零以維持欄寬一致）
+/// 兩種模式的數字欄位都固定寬度 6（右對齊），確保 `"ROI "` + 6 碼 + `"%"` = 10 字元，
+/// 與 `make_clean_text_row` 的 `pad_w = 10` 完全吻合，天然對齊、不需額外補空白：
+/// - `is_major = false`（整數線，範圍 0..=20）：`{:>6}` → `"ROI      5%"` / `"ROI     20%"`
+/// - `is_major = true`（主線，可能為任意浮點且含負值）：`{:>6.2}` 四捨五入到小數點後二位
+///   → `"ROI   8.50%"` / `"ROI  12.50%"` / `"ROI  -5.50%"` / `"ROI -25.50%"`
+///
+/// 用 Rust 內建的數值寬度格式化（四捨五入 + 右對齊補空白），涵蓋 -99.00% ~ 50.00% 的
+/// 完整範圍都不會超出 5 個字元，不會再有這個問題。
 fn fmt_roi_label(roi_pct: f64, is_major: bool) -> String {
     if is_major {
-        format!("ROI {:.4}%", format!("{:.2}", roi_pct))
+        format!("ROI {:>6.2}%", roi_pct)
     } else {
-        format!("ROI {:4}%", roi_pct as usize)
+        format!("ROI {:>6}%", roi_pct as usize)
     }
 }
 
@@ -505,7 +513,7 @@ fn generate_plot(ci: ChartInput, sorted_trends: Vec<TrendRoute>) -> Plot {
                 let label = if let Some(roi_val) = ci.anchor_roi_pct {
                     fmt_roi_label(roi_val, true)
                 } else {
-                    "ROI ----%".to_string()
+                    "ROI   ----%".to_string()
                 };
                 lines.push(make_clean_text_row(
                     &label,
@@ -617,9 +625,9 @@ fn generate_plot(ci: ChartInput, sorted_trends: Vec<TrendRoute>) -> Plot {
         let amt_principal_future = base_route.data[total_months];
         let principal_name = make_clean_text_row(
             if is_narrow {
-                "ROI    0%"
+                "ROI      0%"
             } else {
-                "ROI    0% 本金"
+                "ROI      0% 本金"
             },
             &format_twd_financial(amt_principal_future.0),
             &format_twd_financial(amt_principal_future.1),
@@ -992,11 +1000,12 @@ fn derive_future_summary(
 #[component]
 fn App() -> impl IntoView {
     // 從 localStorage 讀取上次設定
-    let init_start_age = ls_usize(LS_KEY_START_AGE, 25).clamp(0, 150);
-    let init_current_age = ls_usize(LS_KEY_CURRENT_AGE, 38).clamp(init_start_age, 150);
-    let init_target_age = ls_usize(LS_KEY_TARGET_AGE, 65).clamp(init_current_age + 1, 150);
-    let init_h_inv_k = ls_f64(LS_KEY_H_INV_K, 30.0).max(0.0);
-    let init_asset_wan = ls_f64(LS_KEY_ASSET_WAN, 0.0).max(0.0);
+    let init_start_age = ls_usize(LS_KEY_START_AGE, 25).clamp(0, MAX_AGE);
+    let init_current_age = ls_usize(LS_KEY_CURRENT_AGE, 35).clamp(init_start_age, MAX_AGE);
+    let init_target_age =
+        ls_usize(LS_KEY_TARGET_AGE, 65).clamp((init_current_age + 1).min(MAX_AGE + 1), MAX_AGE + 1);
+    let init_h_inv_k = ls_f64(LS_KEY_H_INV_K, 10.0).max(0.0);
+    let init_asset_wan = ls_f64(LS_KEY_ASSET_WAN, 150.0).max(0.0);
     let init_f_inv_k = ls_f64(LS_KEY_F_INV_K, 0.0).max(0.0);
     let init_inflation = ls_usize(LS_KEY_INFLATION, 2).min(6);
     let init_future_mode = match ls_str(LS_KEY_FUTURE_MODE, "stop").as_str() {
@@ -1229,7 +1238,7 @@ fn App() -> impl IntoView {
                             <div class="control-group">
                                 <label class="control-label">"🗓️ 一：開始投資年齡（歲）"</label>
                                 <input type="number" class="number-input"
-                                    min="0" max="150" step="1" inputmode="numeric"
+                                    min="0" max={MAX_AGE.to_string()} step="1" inputmode="numeric"
                                     prop:value=move || start_age_raw.get()
                                     on:input=move |ev| {
                                         let val = event_target_value(&ev);
@@ -1239,7 +1248,7 @@ fn App() -> impl IntoView {
                                         }
                                     }
                                     on:blur=move |_| {
-                                        let v = start_age.get().clamp(0, 150);
+                                        let v = start_age.get().clamp(0, MAX_AGE);
                                         set_start_age.set(v);
                                         set_start_age_raw.set(v.to_string());
                                         if current_age.get() < v {
@@ -1263,7 +1272,7 @@ fn App() -> impl IntoView {
                             <div class="control-group">
                                 <label class="control-label">"🎂 二：目前年齡（歲）"</label>
                                 <input type="number" class="number-input"
-                                    min="0" max="150" step="1" inputmode="numeric"
+                                    min="0" max={MAX_AGE.to_string()} step="1" inputmode="numeric"
                                     prop:value=move || current_age_raw.get()
                                     on:input=move |ev| {
                                         let val = event_target_value(&ev);
@@ -1273,7 +1282,7 @@ fn App() -> impl IntoView {
                                         }
                                     }
                                     on:blur=move |_| {
-                                        let v = current_age.get().clamp(start_age.get(), 150);
+                                        let v = current_age.get().clamp(start_age.get(), MAX_AGE);
                                         set_current_age.set(v);
                                         set_current_age_raw.set(v.to_string());
                                         if target_age.get() <= v {
@@ -1292,7 +1301,7 @@ fn App() -> impl IntoView {
                             <div class="control-group">
                                 <label class="control-label">"🏁 三：目標年齡（歲）"</label>
                                 <input type="number" class="number-input"
-                                    min="0" max="150" step="1" inputmode="numeric"
+                                    min="0" max={(MAX_AGE + 1).to_string()} step="1" inputmode="numeric"
                                     prop:value=move || target_age_raw.get()
                                     on:input=move |ev| {
                                         let val = event_target_value(&ev);
@@ -1302,7 +1311,8 @@ fn App() -> impl IntoView {
                                         }
                                     }
                                     on:blur=move |_| {
-                                        let v = target_age.get().clamp(current_age.get() + 1, 150);
+                                        let min_allowed = (current_age.get() + 1).min(MAX_AGE + 1);
+                                        let v = target_age.get().clamp(min_allowed, MAX_AGE + 1);
                                         set_target_age.set(v);
                                         set_target_age_raw.set(v.to_string());
                                     }
@@ -2035,19 +2045,28 @@ mod tests {
 
     #[test]
     fn test_fmt_roi_label_integer() {
-        // 整數 ROI 格式
-        assert_eq!(fmt_roi_label(5.0, false), "ROI    5%");
-        assert_eq!(fmt_roi_label(10.0, false), "ROI   10%");
-        assert_eq!(fmt_roi_label(20.0, false), "ROI   20%");
+        // 整數 ROI 格式（數字欄固定寬度 5）
+        assert_eq!(fmt_roi_label(5.0, false), "ROI      5%");
+        assert_eq!(fmt_roi_label(10.0, false), "ROI     10%");
+        assert_eq!(fmt_roi_label(20.0, false), "ROI     20%");
     }
 
     #[test]
     fn test_fmt_roi_label_float_consistency() {
-        // 先鎖定兩位，再強迫格式化補滿固定寬度
-        assert_eq!(fmt_roi_label(8.5, true), "ROI 8.50%");
-        assert_eq!(fmt_roi_label(12.5, true), "ROI 12.5%"); // 關鍵：不應截斷
-        assert_eq!(fmt_roi_label(0.0, true), "ROI 0.00%");
-        assert_eq!(fmt_roi_label(-5.5, true), "ROI -5.5%");
+        // 四捨五入到小數點後二位，右對齊補到固定寬度 6
+        assert_eq!(fmt_roi_label(8.5, true), "ROI   8.50%");
+        assert_eq!(fmt_roi_label(12.5, true), "ROI  12.50%");
+        assert_eq!(fmt_roi_label(0.0, true), "ROI   0.00%");
+        assert_eq!(fmt_roi_label(-5.5, true), "ROI  -5.50%");
+    }
+
+    // 改用數值寬度格式化，-99.90% ~ 50.00% 全範圍都應正確顯示。
+    #[test]
+    fn test_fmt_roi_label_double_digit_negative_regression() {
+        assert_eq!(fmt_roi_label(50.0, true), "ROI  50.00%");
+        assert_eq!(fmt_roi_label(-25.5, true), "ROI -25.50%");
+        assert_eq!(fmt_roi_label(-10.0, true), "ROI -10.00%");
+        assert_eq!(fmt_roi_label(-99.9, true), "ROI -99.90%");
     }
 
     // =====================================================================
