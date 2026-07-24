@@ -57,7 +57,7 @@ const LS_KEY_CURRENT_AGE: &str = "fs_current_age";
 const LS_KEY_TARGET_AGE: &str = "fs_target_age";
 const LS_KEY_HIST_INV_MODE: &str = "fs_hist_inv_mode";
 const LS_KEY_H_INV_K: &str = "fs_h_inv_k";
-const LS_KEY_HIST_TOTAL_K: &str = "fs_hist_total_k";
+const LS_KEY_HIST_TOTAL_WAN: &str = "fs_hist_total_wan";
 const LS_KEY_ASSET_WAN: &str = "fs_asset_wan";
 const LS_KEY_FUTURE_MODE: &str = "fs_future_mode";
 const LS_KEY_F_INV_K: &str = "fs_f_inv_k";
@@ -1037,7 +1037,7 @@ fn App() -> impl IntoView {
         _ => HistInvMode::Monthly,
     };
     let init_h_inv_k = ls_f64(LS_KEY_H_INV_K, 10.0).max(0.0);
-    let init_hist_total_k = ls_f64(LS_KEY_HIST_TOTAL_K, 0.0).max(0.0);
+    let init_hist_total_wan = ls_f64(LS_KEY_HIST_TOTAL_WAN, 0.0).max(0.0);
     let init_asset_wan = ls_f64(LS_KEY_ASSET_WAN, 150.0).max(0.0);
     let init_future_mode = match ls_str(LS_KEY_FUTURE_MODE, "stop").as_str() {
         "invest" => FutureMode::Invest,
@@ -1053,7 +1053,7 @@ fn App() -> impl IntoView {
     let (target_age, set_target_age) = signal(init_target_age);
     let (hist_inv_mode, set_hist_inv_mode) = signal(init_hist_inv_mode);
     let (h_inv_k, set_h_inv_k) = signal(init_h_inv_k);
-    let (hist_total_k, set_hist_total_k) = signal(init_hist_total_k);
+    let (hist_total_wan, set_hist_total_wan) = signal(init_hist_total_wan);
     let (asset_wan, set_asset_wan) = signal(init_asset_wan);
     let (future_mode, set_future_mode) = signal(init_future_mode);
     let (f_inv_k, set_f_inv_k) = signal(init_f_inv_k);
@@ -1065,7 +1065,7 @@ fn App() -> impl IntoView {
     let (current_age_raw, set_current_age_raw) = signal(init_current_age.to_string());
     let (target_age_raw, set_target_age_raw) = signal(init_target_age.to_string());
     let (h_inv_k_raw, set_h_inv_k_raw) = signal(init_h_inv_k.to_string());
-    let (hist_total_k_raw, set_hist_total_k_raw) = signal(init_hist_total_k.to_string());
+    let (hist_total_wan_raw, set_hist_total_wan_raw) = signal(init_hist_total_wan.to_string());
     let (asset_wan_raw, set_asset_wan_raw) = signal(init_asset_wan.to_string());
     let (f_inv_k_raw, set_f_inv_k_raw) = signal(init_f_inv_k.to_string());
 
@@ -1089,7 +1089,7 @@ fn App() -> impl IntoView {
         HistInvMode::Total => {
             let months = (hist_years() * 12) as f64;
             if months > 0.0 {
-                (hist_total_k.get() * THOUSAND_TO_TWD) / months
+                (hist_total_wan.get() * WAN_TO_TWD) / months
             } else {
                 0.0
             }
@@ -1097,7 +1097,7 @@ fn App() -> impl IntoView {
     };
     let h_inv_sum = move || match hist_inv_mode.get() {
         // 總投入成本模式下直接採用使用者輸入的總額，避免「先除後乘」的浮點誤差。
-        HistInvMode::Total => hist_total_k.get() * THOUSAND_TO_TWD,
+        HistInvMode::Total => hist_total_wan.get() * WAN_TO_TWD,
         HistInvMode::Monthly => h_inv() * (hist_years() * 12) as f64,
     };
     let current_asset = move || asset_wan.get() * WAN_TO_TWD;
@@ -1262,7 +1262,7 @@ fn App() -> impl IntoView {
             },
         );
         ls_set(LS_KEY_H_INV_K, &h_inv_k.get().to_string());
-        ls_set(LS_KEY_HIST_TOTAL_K, &hist_total_k.get().to_string());
+        ls_set(LS_KEY_HIST_TOTAL_WAN, &hist_total_wan.get().to_string());
         ls_set(LS_KEY_ASSET_WAN, &asset_wan.get().to_string());
         ls_set(
             LS_KEY_FUTURE_MODE,
@@ -1381,67 +1381,79 @@ fn App() -> impl IntoView {
 
                             <Show when=move || is_hist_years_active()>
                                 <div class="control-group">
-                                    <label class="control-label">"💰 四：歷史投入（千元）"</label>
-                                    <div class="toggle-group">
+                                    <label class="control-label">{move || match hist_inv_mode.get() {
+                                        HistInvMode::Monthly => "💰 四：歷史投入（千元）",
+                                        HistInvMode::Total => "💰 四：歷史投入（萬元）",
+                                    }}</label>
+                                    <div class="input-with-toggle">
                                         <button
-                                            class=move || if hist_inv_mode.get() == HistInvMode::Monthly { "toggle-btn active mode" } else { "toggle-btn" }
-                                            on:click=move |_| set_hist_inv_mode.set(HistInvMode::Monthly)
-                                        >"📅 每月投入"</button>
-                                        <button
-                                            class=move || if hist_inv_mode.get() == HistInvMode::Total { "toggle-btn active mode" } else { "toggle-btn" }
-                                            on:click=move |_| set_hist_inv_mode.set(HistInvMode::Total)
-                                        >"📦 總成本"</button>
-                                    </div>
-                                    <Show when=move || hist_inv_mode.get() == HistInvMode::Monthly>
-                                        <input type="number" class="number-input"
-                                            min="0" max="99999" step="1" inputmode="decimal"
-                                            prop:value=move || h_inv_k_raw.get()
-                                            on:input=move |ev| {
-                                                let val = event_target_value(&ev);
-                                                set_h_inv_k_raw.set(val.clone());
-                                                if let Ok(v) = val.parse::<f64>() {
-                                                    set_h_inv_k.set(v.max(0.0));
+                                            type="button"
+                                            class="hist-mode-toggle"
+                                            title=move || match hist_inv_mode.get() {
+                                                HistInvMode::Monthly => "切換為：總成本輸入",
+                                                HistInvMode::Total => "切換為：每月投入輸入",
+                                            }
+                                            on:click=move |_| set_hist_inv_mode.update(|m| *m = match *m {
+                                                HistInvMode::Monthly => HistInvMode::Total,
+                                                HistInvMode::Total => HistInvMode::Monthly,
+                                            })
+                                        >{move || match hist_inv_mode.get() {
+                                            HistInvMode::Monthly => "📅 每月投入",
+                                            HistInvMode::Total => "📦 總成本",
+                                        }}</button>
+                                        <Show when=move || hist_inv_mode.get() == HistInvMode::Monthly>
+                                            <input type="number" class="number-input"
+                                                min="0" max="99999" step="1" inputmode="decimal"
+                                                prop:value=move || h_inv_k_raw.get()
+                                                on:input=move |ev| {
+                                                    let val = event_target_value(&ev);
+                                                    set_h_inv_k_raw.set(val.clone());
+                                                    if let Ok(v) = val.parse::<f64>() {
+                                                        set_h_inv_k.set(v.max(0.0));
+                                                    }
                                                 }
-                                            }
-                                            on:blur=move |_| {
-                                                let v = h_inv_k.get().max(0.0);
-                                                set_h_inv_k.set(v);
-                                                set_h_inv_k_raw.set(v.to_string());
-                                            }
-                                        />
-                                        <div class="input-hint">{move || {
+                                                on:blur=move |_| {
+                                                    let v = h_inv_k.get().max(0.0);
+                                                    set_h_inv_k.set(v);
+                                                    set_h_inv_k_raw.set(v.to_string());
+                                                }
+                                            />
+                                        </Show>
+                                        <Show when=move || hist_inv_mode.get() == HistInvMode::Total>
+                                            <input type="number" class="number-input"
+                                                min="0" step="1" inputmode="decimal"
+                                                prop:value=move || hist_total_wan_raw.get()
+                                                on:input=move |ev| {
+                                                    let val = event_target_value(&ev);
+                                                    set_hist_total_wan_raw.set(val.clone());
+                                                    if let Ok(v) = val.parse::<f64>() {
+                                                        set_hist_total_wan.set(v.max(0.0));
+                                                    }
+                                                }
+                                                on:blur=move |_| {
+                                                    let v = hist_total_wan.get().max(0.0);
+                                                    set_hist_total_wan.set(v);
+                                                    set_hist_total_wan_raw.set(v.to_string());
+                                                }
+                                            />
+                                        </Show>
+                                    </div>
+                                    <div class="input-hint">{move || match hist_inv_mode.get() {
+                                        HistInvMode::Monthly => {
                                             if h_inv_k.get() == 0.0 {
                                                 "尚未輸入歷史每月投入金額".to_string()
                                             } else {
                                                 format!("= {} 共投入 {}", format_twd_financial(h_inv()), format_twd_financial(h_inv_sum()))
                                             }
-                                        }}</div>
-                                    </Show>
-                                    <Show when=move || hist_inv_mode.get() == HistInvMode::Total>
-                                        <input type="number" class="number-input"
-                                            min="0" max="9999999" step="1" inputmode="decimal"
-                                            prop:value=move || hist_total_k_raw.get()
-                                            on:input=move |ev| {
-                                                let val = event_target_value(&ev);
-                                                set_hist_total_k_raw.set(val.clone());
-                                                if let Ok(v) = val.parse::<f64>() {
-                                                    set_hist_total_k.set(v.max(0.0));
-                                                }
-                                            }
-                                            on:blur=move |_| {
-                                                let v = hist_total_k.get().max(0.0);
-                                                set_hist_total_k.set(v);
-                                                set_hist_total_k_raw.set(v.to_string());
-                                            }
-                                        />
-                                        <div class="input-hint">{move || {
-                                            if hist_total_k.get() == 0.0 {
+                                        }
+                                        HistInvMode::Total => {
+                                            if hist_total_wan.get() == 0.0 {
                                                 "尚未輸入歷史總投入成本".to_string()
                                             } else {
                                                 format!("= {} 約等同每月投入 {}", format_twd_financial(h_inv_sum()), format_twd_financial(h_inv()))
                                             }
-                                        }}</div>
-                                    </Show>
+                                        }
+                                    }}</div>
                                 </div>
                             </Show>
                             <div class="control-group">
@@ -2344,13 +2356,13 @@ mod tests {
         assert_eq!(format_twd_financial(-100_000_000.0), "-1.0億");
     }
 
-    /// 「總投入成本」模式：由總額 ÷ 已投月數，反推每月投入金額
+    /// 「總投入成本」模式：由總額 ÷ 已投月數，反推每月投入金額（總成本單位為「萬元」）
     #[test]
     fn test_hist_total_mode_derives_monthly_from_total() {
         let hist_years = 5usize;
         let months = (hist_years * 12) as f64;
-        let total_cost_k = 600.0; // 60萬元（單位：千元）
-        let h_inv = (total_cost_k * THOUSAND_TO_TWD) / months;
+        let total_cost_wan = 60.0; // 60萬元（單位：萬元）
+        let h_inv = (total_cost_wan * WAN_TO_TWD) / months;
         assert!((h_inv - 10_000.0).abs() < 1e-9); // 600,000 / 60 個月 = 每月 1 萬
     }
 }

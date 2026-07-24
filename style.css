@@ -153,6 +153,42 @@ body {
   white-space: normal;
 }
 
+/* 歷史投入：模式切換做成輸入框左側的小圖示鈕（點一下切換每月／總成本），
+   不佔額外一列高度，label/input/hint 結構與其他欄位完全一致，自然對齊。*/
+.input-with-toggle {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.input-with-toggle .number-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.hist-mode-toggle {
+  flex: 0 0 auto;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: rgba(45, 212, 191, 0.1);
+  color: var(--accent-teal);
+  font-size: 0.85rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: var(--transition-smooth);
+}
+
+.hist-mode-toggle:hover {
+  border-color: var(--border-color-hover);
+  background: rgba(45, 212, 191, 0.18);
+}
+
+.hist-mode-toggle:focus-visible {
+  outline: none;
+  border-color: var(--accent-red);
+  box-shadow: 0 0 0 3px rgba(244, 63, 94, 0.25);
+}
+
 .select-wrapper {
   position: relative;
 }
@@ -308,13 +344,6 @@ body {
   color: var(--accent-red);
 }
 
-/* 泛用「輸入模式切換」樣式（例如：歷史投入的每月/總額切換），無特定語意色彩 */
-.toggle-btn.active.mode {
-  border-color: rgba(45, 212, 191, 0.5);
-  background: rgba(45, 212, 191, 0.1);
-  color: var(--accent-teal);
-}
-
 .toggle-amount {
   margin-top: 8px;
 }
@@ -420,7 +449,7 @@ body {
     border: none;
     background: none;
     margin-bottom: 14px;
-      overflow: visible;
+    overflow: visible;
   }
 
   .controls-summary {
@@ -465,7 +494,7 @@ body {
   .control-label {
     margin-bottom: 6px;
     min-height: auto;
-    }
+  }
 
   .controls-grid-future {
     grid-template-columns: 1fr;
@@ -527,6 +556,10 @@ body {
     font-size: 0.6rem;
     min-height: auto;
     margin-bottom: 1px;
+  }
+
+  .hist-mode-toggle {
+    font-size: 0.75rem;
   }
 
   .toggle-btn,
