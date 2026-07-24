@@ -55,11 +55,13 @@ const WAN_TO_TWD: f64 = 10_000.0;
 const LS_KEY_START_AGE: &str = "fs_start_age";
 const LS_KEY_CURRENT_AGE: &str = "fs_current_age";
 const LS_KEY_TARGET_AGE: &str = "fs_target_age";
+const LS_KEY_HIST_INV_MODE: &str = "fs_hist_inv_mode";
 const LS_KEY_H_INV_K: &str = "fs_h_inv_k";
+const LS_KEY_HIST_TOTAL_K: &str = "fs_hist_total_k";
 const LS_KEY_ASSET_WAN: &str = "fs_asset_wan";
+const LS_KEY_FUTURE_MODE: &str = "fs_future_mode";
 const LS_KEY_F_INV_K: &str = "fs_f_inv_k";
 const LS_KEY_INFLATION: &str = "fs_inflation";
-const LS_KEY_FUTURE_MODE: &str = "fs_future_mode";
 
 // =====================================================================
 // # 0. 全域狀態型別定義
@@ -70,6 +72,13 @@ enum FutureMode {
     Stop,
     Invest,
     Withdraw,
+}
+
+/// 歷史投入的輸入模式：直接填每月投入，或改填累積總投入成本（由系統換算回每月）。
+#[derive(Clone, Copy, PartialEq)]
+enum HistInvMode {
+    Monthly,
+    Total,
 }
 
 #[derive(Clone, PartialEq)]
@@ -92,6 +101,10 @@ impl ChartInput {
 
     fn h_inv_sum(&self) -> f64 {
         self.h_inv * (self.hist_years * 12) as f64
+    }
+
+    fn target_age(&self) -> usize {
+        self.start_age + self.total_years
     }
 }
 
@@ -213,30 +226,41 @@ fn format_with_commas(val: f64, precision: usize) -> String {
     formatted
 }
 
+/// 格式化新台幣（TWD）財務大額數字，自動轉換單位：元、萬、億、兆
 fn format_twd_financial(val: f64) -> String {
     let abs_val = val.abs();
 
-    // >= 1億
-    if abs_val >= 100_000_000.0 {
-        format!("{}億", format_with_commas(val / 100_000_000.0, 1))
+    // 定義大額單位配置：(門檻值, 單位名稱, 是否強制顯示1位小數)
+    // 依數值由大到小排列
+    let units = [
+        (1e12, "兆", true), // 兆
+        (1e8, "億", true),  // 億
+    ];
+
+    // 1. 處理億級與兆級以上的巨額數字
+    for &(threshold, unit, force_decimal) in &units {
+        if abs_val >= threshold {
+            let unit_val = val / threshold;
+            // 根據配置決定是否強制保留 1 位小數（如 1.0億、1.5兆）
+            let decimals = if force_decimal { 1 } else { 0 };
+            return format!("{}{}", format_with_commas(unit_val, decimals), unit);
+        }
     }
-    // >= 1萬
-    else if abs_val >= 10_000.0 {
+
+    // 2. 處理萬級數字（1萬 <= val < 1億）
+    if abs_val >= 10_000.0 {
         let val_in_wan = val / 10_000.0;
         let abs_wan = val_in_wan.abs();
 
-        // 整萬顯示整數，否則顯示一位小數
+        // 判斷是否為整萬（誤差小於 0.01）
         let is_round = (abs_wan - abs_wan.round()).abs() < 0.01;
-        if is_round {
-            format!("{}萬", format_with_commas(val_in_wan, 0))
-        } else {
-            format!("{}萬", format_with_commas(val_in_wan, 1))
-        }
+        let decimals = if is_round { 0 } else { 1 };
+
+        return format!("{}萬", format_with_commas(val_in_wan, decimals));
     }
-    // < 1萬：直接顯示千分位整數
-    else {
-        format!("{}元", format_with_commas(val, 0))
-    }
+
+    // 3. 處理小於 1 萬的數字（直接顯示千分位整數）
+    format!("{}元", format_with_commas(val, 0))
 }
 
 fn make_clean_text_row(
@@ -785,14 +809,18 @@ fn generate_plot(ci: ChartInput, sorted_trends: Vec<TrendRoute>) -> Plot {
 
     // Y 軸刻度候選（中文單位，動態篩選落在可視範圍內的）
     let all_potential_ticks: Vec<(f64, &str)> = vec![
-        (10_000.0, "1萬"),
-        (100_000.0, "10萬"),
-        (1_000_000.0, "100萬"),
-        (10_000_000.0, "1,000萬"),
-        (100_000_000.0, "1億"),
-        (1_000_000_000.0, "10億"),
-        (10_000_000_000.0, "100億"),
-        (100_000_000_000.0, "1000億"),
+        (1e4, "1萬"),
+        (1e5, "10萬"),
+        (1e6, "100萬"),
+        (1e7, "1,000萬"),
+        (1e8, "1億"),
+        (1e9, "10億"),
+        (1e10, "100億"),
+        (1e11, "1,000億"),
+        (1e12, "1兆"),
+        (1e13, "10兆"),
+        (1e14, "100兆"),
+        (1e15, "1,000兆"),
     ];
 
     let mut dynamic_y_vals = Vec::new();
@@ -1004,21 +1032,28 @@ fn App() -> impl IntoView {
     let init_current_age = ls_usize(LS_KEY_CURRENT_AGE, 35).clamp(init_start_age, MAX_AGE);
     let init_target_age =
         ls_usize(LS_KEY_TARGET_AGE, 65).clamp((init_current_age + 1).min(MAX_AGE + 1), MAX_AGE + 1);
+    let init_hist_inv_mode = match ls_str(LS_KEY_HIST_INV_MODE, "monthly").as_str() {
+        "total" => HistInvMode::Total,
+        _ => HistInvMode::Monthly,
+    };
     let init_h_inv_k = ls_f64(LS_KEY_H_INV_K, 10.0).max(0.0);
+    let init_hist_total_k = ls_f64(LS_KEY_HIST_TOTAL_K, 0.0).max(0.0);
     let init_asset_wan = ls_f64(LS_KEY_ASSET_WAN, 150.0).max(0.0);
-    let init_f_inv_k = ls_f64(LS_KEY_F_INV_K, 0.0).max(0.0);
-    let init_inflation = ls_usize(LS_KEY_INFLATION, 2).min(6);
     let init_future_mode = match ls_str(LS_KEY_FUTURE_MODE, "stop").as_str() {
         "invest" => FutureMode::Invest,
         "withdraw" => FutureMode::Withdraw,
         _ => FutureMode::Stop,
     };
+    let init_f_inv_k = ls_f64(LS_KEY_F_INV_K, 0.0).max(0.0);
+    let init_inflation = ls_usize(LS_KEY_INFLATION, 2).min(6);
 
     // Signals
     let (start_age, set_start_age) = signal(init_start_age);
     let (current_age, set_current_age) = signal(init_current_age);
     let (target_age, set_target_age) = signal(init_target_age);
+    let (hist_inv_mode, set_hist_inv_mode) = signal(init_hist_inv_mode);
     let (h_inv_k, set_h_inv_k) = signal(init_h_inv_k);
+    let (hist_total_k, set_hist_total_k) = signal(init_hist_total_k);
     let (asset_wan, set_asset_wan) = signal(init_asset_wan);
     let (future_mode, set_future_mode) = signal(init_future_mode);
     let (f_inv_k, set_f_inv_k) = signal(init_f_inv_k);
@@ -1030,6 +1065,7 @@ fn App() -> impl IntoView {
     let (current_age_raw, set_current_age_raw) = signal(init_current_age.to_string());
     let (target_age_raw, set_target_age_raw) = signal(init_target_age.to_string());
     let (h_inv_k_raw, set_h_inv_k_raw) = signal(init_h_inv_k.to_string());
+    let (hist_total_k_raw, set_hist_total_k_raw) = signal(init_hist_total_k.to_string());
     let (asset_wan_raw, set_asset_wan_raw) = signal(init_asset_wan.to_string());
     let (f_inv_k_raw, set_f_inv_k_raw) = signal(init_f_inv_k.to_string());
 
@@ -1047,8 +1083,23 @@ fn App() -> impl IntoView {
         }
     };
 
-    let h_inv = move || h_inv_k.get() * THOUSAND_TO_TWD;
-    let h_inv_sum = move || h_inv() * (hist_years() * 12) as f64;
+    // 歷史每月投入：依輸入模式決定直接取值，或由「總投入成本」平均回推。
+    let h_inv = move || match hist_inv_mode.get() {
+        HistInvMode::Monthly => h_inv_k.get() * THOUSAND_TO_TWD,
+        HistInvMode::Total => {
+            let months = (hist_years() * 12) as f64;
+            if months > 0.0 {
+                (hist_total_k.get() * THOUSAND_TO_TWD) / months
+            } else {
+                0.0
+            }
+        }
+    };
+    let h_inv_sum = move || match hist_inv_mode.get() {
+        // 總投入成本模式下直接採用使用者輸入的總額，避免「先除後乘」的浮點誤差。
+        HistInvMode::Total => hist_total_k.get() * THOUSAND_TO_TWD,
+        HistInvMode::Monthly => h_inv() * (hist_years() * 12) as f64,
+    };
     let current_asset = move || asset_wan.get() * WAN_TO_TWD;
 
     let lump_sum = move || current_asset();
@@ -1203,10 +1254,16 @@ fn App() -> impl IntoView {
         ls_set(LS_KEY_START_AGE, &start_age.get().to_string());
         ls_set(LS_KEY_CURRENT_AGE, &current_age.get().to_string());
         ls_set(LS_KEY_TARGET_AGE, &target_age.get().to_string());
+        ls_set(
+            LS_KEY_HIST_INV_MODE,
+            match hist_inv_mode.get() {
+                HistInvMode::Monthly => "monthly",
+                HistInvMode::Total => "total",
+            },
+        );
         ls_set(LS_KEY_H_INV_K, &h_inv_k.get().to_string());
+        ls_set(LS_KEY_HIST_TOTAL_K, &hist_total_k.get().to_string());
         ls_set(LS_KEY_ASSET_WAN, &asset_wan.get().to_string());
-        ls_set(LS_KEY_F_INV_K, &f_inv_k.get().to_string());
-        ls_set(LS_KEY_INFLATION, &inflation_rate.get().to_string());
         ls_set(
             LS_KEY_FUTURE_MODE,
             match future_mode.get() {
@@ -1215,6 +1272,8 @@ fn App() -> impl IntoView {
                 FutureMode::Withdraw => "withdraw",
             },
         );
+        ls_set(LS_KEY_F_INV_K, &f_inv_k.get().to_string());
+        ls_set(LS_KEY_INFLATION, &inflation_rate.get().to_string());
     });
 
     view! {
@@ -1322,24 +1381,67 @@ fn App() -> impl IntoView {
 
                             <Show when=move || is_hist_years_active()>
                                 <div class="control-group">
-                                    <label class="control-label">"💰 四：歷史每月投入（千元）"</label>
-                                    <input type="number" class="number-input"
-                                        min="0" max="99999" step="1" inputmode="decimal"
-                                        prop:value=move || h_inv_k_raw.get()
-                                        on:input=move |ev| {
-                                            let val = event_target_value(&ev);
-                                            set_h_inv_k_raw.set(val.clone());
-                                            if let Ok(v) = val.parse::<f64>() {
-                                                set_h_inv_k.set(v.max(0.0));
+                                    <label class="control-label">"💰 四：歷史投入（千元）"</label>
+                                    <div class="toggle-group">
+                                        <button
+                                            class=move || if hist_inv_mode.get() == HistInvMode::Monthly { "toggle-btn active mode" } else { "toggle-btn" }
+                                            on:click=move |_| set_hist_inv_mode.set(HistInvMode::Monthly)
+                                        >"📅 每月投入"</button>
+                                        <button
+                                            class=move || if hist_inv_mode.get() == HistInvMode::Total { "toggle-btn active mode" } else { "toggle-btn" }
+                                            on:click=move |_| set_hist_inv_mode.set(HistInvMode::Total)
+                                        >"📦 總成本"</button>
+                                    </div>
+                                    <Show when=move || hist_inv_mode.get() == HistInvMode::Monthly>
+                                        <input type="number" class="number-input"
+                                            min="0" max="99999" step="1" inputmode="decimal"
+                                            prop:value=move || h_inv_k_raw.get()
+                                            on:input=move |ev| {
+                                                let val = event_target_value(&ev);
+                                                set_h_inv_k_raw.set(val.clone());
+                                                if let Ok(v) = val.parse::<f64>() {
+                                                    set_h_inv_k.set(v.max(0.0));
+                                                }
                                             }
-                                        }
-                                        on:blur=move |_| {
-                                            let v = h_inv_k.get().max(0.0);
-                                            set_h_inv_k.set(v);
-                                            set_h_inv_k_raw.set(v.to_string());
-                                        }
-                                    />
-                                    <div class="input-hint">{move || format!("= {} 共投入 {}", format_twd_financial(h_inv()), format_twd_financial(h_inv_sum()))}</div>
+                                            on:blur=move |_| {
+                                                let v = h_inv_k.get().max(0.0);
+                                                set_h_inv_k.set(v);
+                                                set_h_inv_k_raw.set(v.to_string());
+                                            }
+                                        />
+                                        <div class="input-hint">{move || {
+                                            if h_inv_k.get() == 0.0 {
+                                                "尚未輸入歷史每月投入金額".to_string()
+                                            } else {
+                                                format!("= {} 共投入 {}", format_twd_financial(h_inv()), format_twd_financial(h_inv_sum()))
+                                            }
+                                        }}</div>
+                                    </Show>
+                                    <Show when=move || hist_inv_mode.get() == HistInvMode::Total>
+                                        <input type="number" class="number-input"
+                                            min="0" max="9999999" step="1" inputmode="decimal"
+                                            prop:value=move || hist_total_k_raw.get()
+                                            on:input=move |ev| {
+                                                let val = event_target_value(&ev);
+                                                set_hist_total_k_raw.set(val.clone());
+                                                if let Ok(v) = val.parse::<f64>() {
+                                                    set_hist_total_k.set(v.max(0.0));
+                                                }
+                                            }
+                                            on:blur=move |_| {
+                                                let v = hist_total_k.get().max(0.0);
+                                                set_hist_total_k.set(v);
+                                                set_hist_total_k_raw.set(v.to_string());
+                                            }
+                                        />
+                                        <div class="input-hint">{move || {
+                                            if hist_total_k.get() == 0.0 {
+                                                "尚未輸入歷史總投入成本".to_string()
+                                            } else {
+                                                format!("= {} 約等同每月投入 {}", format_twd_financial(h_inv_sum()), format_twd_financial(h_inv()))
+                                            }
+                                        }}</div>
+                                    </Show>
                                 </div>
                             </Show>
                             <div class="control-group">
@@ -1471,8 +1573,7 @@ fn App() -> impl IntoView {
                 {move || {
                     let ci = debounced_chart_input.get();
                     let trends = trends_memo.get();
-                    let sage = start_age.get();
-                    let tage = target_age.get();
+                    let tage = ci.target_age();
 
                     let (future_desc, end_str, roi_info) = derive_future_summary(
                         &ci, &trends, asset_wan.get(), future_mode.get()
@@ -1483,9 +1584,9 @@ fn App() -> impl IntoView {
                     match (ci.hist_years, ci.lump_sum == 0.0) {
                         // 情境 A：無歷史、無起始本金
                         (0, true) => {
-                            let intro = if sage == 0 { "👶 幫新生兒從 0 歲白手起家 — " } else { "📊 規劃從 " };
+                            let intro = if ci.start_age == 0 { "👶 幫新生兒從 0 歲白手起家 — " } else { "📊 規劃從 " };
                             view! { <span class="summary-text">
-                                {intro} {if sage > 0 { format!("{} 歲出發 — ", sage) } else { "".to_string() }}
+                                {intro} {if ci.start_age > 0 { format!("{} 歲出發 — ", ci.start_age) } else { "".to_string() }}
                                 {future_desc} "，以系統基準預估年化回報 " <strong>{format!("{roi:.2}")} "%"</strong> " 在 "
                                 <strong>{tage}</strong> " 歲時，" <span inner_html=end_str />
                             </span> }.into_any()
@@ -1493,10 +1594,10 @@ fn App() -> impl IntoView {
 
                         // 情境 B：無歷史、有起始本金（單筆配置）
                         (0, false) => {
-                            let intro = if sage == 0 { "👶 幫小孩從 0 歲配置 — " } else { "💰 規劃從 " };
+                            let intro = if ci.start_age == 0 { "👶 幫小孩從 0 歲配置 — " } else { "💰 規劃從 " };
                             let ls_desc = format!("起始本金 <strong>{}</strong>", format_twd_financial(ci.lump_sum));
                             view! { <span class="summary-text">
-                                {intro} {if sage > 0 { format!("{} 歲配置 — ", sage) } else { "".to_string() }}
+                                {intro} {if ci.start_age > 0 { format!("{} 歲配置 — ", ci.start_age) } else { "".to_string() }}
                                 <span inner_html=ls_desc /> "，" {future_desc} "，並以基準預估年化回報 " <strong>{format!("{roi:.2}")} "%"</strong> " 在 "
                                 <strong>{tage}</strong> " 歲時，" <span inner_html=end_str />
                             </span> }.into_any()
@@ -1511,7 +1612,7 @@ fn App() -> impl IntoView {
                             };
 
                             view! { <span class="summary-text">
-                                "自 " {sage} " 歲起每月投資 " {format_twd_financial(ci.h_inv)}
+                                "自 " {ci.start_age} " 歲起每月投資 " {format_twd_financial(ci.h_inv)}
                                 " 共投入 " <strong>{format_twd_financial(ci.h_inv_sum())}</strong>
                                 "，至今已投 " {ci.hist_years} " 年" <span inner_html=roi_info />
                                 {strategy_desc} <strong>{tage}</strong> " 歲時，" <span inner_html=end_str />
@@ -2208,16 +2309,26 @@ mod tests {
     // # 14. 新增測試 — format_twd_financial 邊界案例
     // =====================================================================
 
-    /// 恰好 10,000 元的邊界
+    /// 測試大於等於兆級的巨額邊界
     #[test]
-    fn test_format_twd_exactly_ten_thousand() {
-        assert_eq!(format_twd_financial(10_000.0), "1萬");
+    fn test_format_twd_trillion_values() {
+        assert_eq!(format_twd_financial(1_000_000_000_000.0), "1.0兆");
+        assert_eq!(format_twd_financial(3_500_000_000_000.0), "3.5兆");
+        assert_eq!(format_twd_financial(-12_400_000_000_000.0), "-12.4兆");
     }
 
     /// 恰好 100,000,000 元的億級邊界
     #[test]
     fn test_format_twd_exactly_one_hundred_million() {
         assert_eq!(format_twd_financial(100_000_000.0), "1.0億");
+        assert_eq!(format_twd_financial(123_450_000_000.0), "1,234.5億");
+    }
+
+    /// 恰好 10,000 元的邊界
+    #[test]
+    fn test_format_twd_exactly_ten_thousand() {
+        assert_eq!(format_twd_financial(10_000.0), "1萬");
+        assert_eq!(format_twd_financial(15_500.0), "1.6萬"); // 四捨五入示意
     }
 
     /// 9,999 元應屬於「元」級，不跨越萬
@@ -2231,5 +2342,15 @@ mod tests {
     fn test_format_twd_negative_values() {
         assert_eq!(format_twd_financial(-50_000.0), "-5萬");
         assert_eq!(format_twd_financial(-100_000_000.0), "-1.0億");
+    }
+
+    /// 「總投入成本」模式：由總額 ÷ 已投月數，反推每月投入金額
+    #[test]
+    fn test_hist_total_mode_derives_monthly_from_total() {
+        let hist_years = 5usize;
+        let months = (hist_years * 12) as f64;
+        let total_cost_k = 600.0; // 60萬元（單位：千元）
+        let h_inv = (total_cost_k * THOUSAND_TO_TWD) / months;
+        assert!((h_inv - 10_000.0).abs() < 1e-9); // 600,000 / 60 個月 = 每月 1 萬
     }
 }

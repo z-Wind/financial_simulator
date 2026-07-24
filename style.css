@@ -308,6 +308,13 @@ body {
   color: var(--accent-red);
 }
 
+/* 泛用「輸入模式切換」樣式（例如：歷史投入的每月/總額切換），無特定語意色彩 */
+.toggle-btn.active.mode {
+  border-color: rgba(45, 212, 191, 0.5);
+  background: rgba(45, 212, 191, 0.1);
+  color: var(--accent-teal);
+}
+
 .toggle-amount {
   margin-top: 8px;
 }
