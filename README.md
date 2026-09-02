@@ -1,7 +1,13 @@
 # 📈 人生財務戰略導航模擬器 (Financial Simulator)
 [![Get Data and Deploy](https://github.com/z-Wind/financial_simulator/actions/workflows/deploy.yml/badge.svg)](https://github.com/z-Wind/financial_simulator/actions/workflows/deploy.yml)
 
-👉 **[點此進入線上模擬器](https://z-Wind.github.io/financial_simulator/)**
+<p align="center">
+  <font size="4"><b><a href="https://z-Wind.github.io/financial_simulator/">點此進入線上模擬器</a></b></font>
+  <br><br>
+  <img src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=https://z-Wind.github.io/financial_simulator/" alt="QR Code" width="150"/>
+  <br>
+  <sub>手機掃描上方 QR Code 立即體驗</sub>
+</p>
 
 一個基於 WebAssembly (WASM) 技術開發的高效能網頁端財務規劃與模擬工具。本專案採用 Rust 語言的 **Leptos** 框架進行用戶端渲染 (CSR)，並整合 **Plotly.js** 提供流暢、互動性高的財務趨勢圖表，幫助使用者視覺化未來的人生財務戰略。
 
