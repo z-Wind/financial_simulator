@@ -90,7 +90,7 @@ struct ChartInput {
     anchor_roi_pct: Option<f64>,
     lump_sum: f64,
     f_inv: f64,
-    inflation_rate: usize,
+    inflation_rate: f64,
     window_width: u32,
 }
 
@@ -306,13 +306,13 @@ struct TrendRoute {
 }
 
 fn calculate_true_pivot_trends(
-    h_inv: f64,            // 歷史每月投入（元）
-    f_inv: f64,            // 未來每月投入/提領（元）
-    anchor_roi_pct: f64,   // 外部傳入的精確浮點數年化 ROI
-    inflation_rate: usize, // 未來通膨率
-    hist_years: usize,     // 歷史年期
-    total_years: usize,    // 總模擬年期
-    lump_sum: f64,         // 現有資產結算點（元）
+    h_inv: f64,          // 歷史每月投入（元）
+    f_inv: f64,          // 未來每月投入/提領（元）
+    anchor_roi_pct: f64, // 外部傳入的精確浮點數年化 ROI
+    inflation_rate: f64, // 未來通膨率
+    hist_years: usize,   // 歷史年期
+    total_years: usize,  // 總模擬年期
+    lump_sum: f64,       // 現有資產結算點（元）
 ) -> Vec<TrendRoute> {
     let hist_months = hist_years * 12;
     let total_months = total_years * 12;
@@ -320,7 +320,7 @@ fn calculate_true_pivot_trends(
 
     // 換算月化複合利率
     let anchor_monthly_rate = (1.0 + (anchor_roi_pct / 100.0)).powf(1.0 / 12.0) - 1.0;
-    let inflation_monthly_rate = (1.0 + (inflation_rate as f64) / 100.0).powf(1.0 / 12.0) - 1.0;
+    let inflation_monthly_rate = (1.0 + (inflation_rate / 100.0)).powf(1.0 / 12.0) - 1.0;
 
     // 1. 歷史階段
     let mut hist_route = Vec::with_capacity(hist_months + 1);
@@ -493,7 +493,7 @@ fn get_annotations(
 // =====================================================================
 fn generate_plot(ci: ChartInput, sorted_trends: Vec<TrendRoute>) -> Plot {
     let is_narrow = ci.window_width < NARROW_WIDTH_BREAKPOINT;
-    let is_inflation = ci.inflation_rate > 0;
+    let is_inflation = ci.inflation_rate > 0.0;
     let total_months = ci.total_years * 12;
     let hist_months = ci.hist_years * 12;
 
@@ -693,7 +693,7 @@ fn generate_plot(ci: ChartInput, sorted_trends: Vec<TrendRoute>) -> Plot {
         };
 
         format!(
-            "<br><span style='font-size: 13px; color: #2DD4BF; letter-spacing: 0.5px;'>📊 戰略配置 ── 起始 {}歲 ({}/月{}) | 現況 {}歲 | 目標 {}歲 [{}] | 折現通膨 {}%/年</span>",
+            "<br><span style='font-size: 13px; color: #2DD4BF; letter-spacing: 0.5px;'>📊 戰略配置 ── 起始 {}歲 ({}/月{}) | 現況 {}歲 | 目標 {}歲 [{}] | 折現通膨 {:.1}%/年</span>",
             ci.start_age,
             format_twd_financial(ci.h_inv),
             history_investment_text,
@@ -981,7 +981,7 @@ fn derive_future_summary(
 
         bankruptcy_text
     } else {
-        let real_str = if ci.inflation_rate > 0 {
+        let real_str = if ci.inflation_rate > 0.0 {
             format!(
                 "，實質購買力約 <strong>{}</strong>",
                 format_twd_financial(real)
@@ -1045,7 +1045,7 @@ fn App() -> impl IntoView {
         _ => FutureMode::Stop,
     };
     let init_f_inv_k = ls_f64(LS_KEY_F_INV_K, 0.0).max(0.0);
-    let init_inflation = ls_usize(LS_KEY_INFLATION, 2).min(6);
+    let init_inflation = ls_f64(LS_KEY_INFLATION, 2.0).clamp(0.0, 10.0);
 
     // Signals
     let (start_age, set_start_age) = signal(init_start_age);
@@ -1068,6 +1068,7 @@ fn App() -> impl IntoView {
     let (hist_total_wan_raw, set_hist_total_wan_raw) = signal(init_hist_total_wan.to_string());
     let (asset_wan_raw, set_asset_wan_raw) = signal(init_asset_wan.to_string());
     let (f_inv_k_raw, set_f_inv_k_raw) = signal(init_f_inv_k.to_string());
+    let (inflation_rate_raw, set_inflation_rate_raw) = signal(init_inflation.to_string());
 
     // 衍生計算值
     let hist_years = move || current_age.get().saturating_sub(start_age.get());
@@ -1281,13 +1282,36 @@ fn App() -> impl IntoView {
             <h2 class="app-title">"人生財務戰略導航：現況資產錨定與未來變革推演模擬器"</h2>
 
             <div class=move || if panel_open.get() { "controls-panel panel-open" } else { "controls-panel" }>
-                <button class="controls-summary" on:click=move |_| set_panel_open.update(|v| *v = !*v)>
+                <div class="controls-summary"
+                    style="display: flex; align-items: center; justify-content: space-between; width: 100%; cursor: pointer; user-select: none;"
+                    on:click=move |_| set_panel_open.update(|v| *v = !*v)
+                >
                     <span class="summary-title">"⚙️ 模擬參數設定"</span>
-                    <span class=move || if panel_open.get() { "panel-status-badge badge-open" } else { "panel-status-badge" }>
-                        <span class="badge-text">{move || if panel_open.get() { "收合設定" } else { "修改參數" }}</span>
-                        <span class="badge-arrow">"▾"</span>
-                    </span>
-                </button>
+
+                    <div style="display: flex; align-items: center; gap: 12px;">
+                        <button
+                            type="button"
+                            class="clear-storage-btn"
+                            style="background-color: #1E293B; color: #94A3B8; border: 1px solid #334155; padding: 4px 10px; border-radius: 4px; font-size: 12px; cursor: pointer; transition: all 0.2s;"
+                            on:click=move |ev| {
+                                ev.stop_propagation(); // 🛑 重要：防止點擊清除時同時觸發面板收合
+                                #[cfg(target_family = "wasm")]
+                                if let Some(win) = web_sys::window()
+                                    && let Some(ls) = win.local_storage().ok().flatten() {
+                                    let _ = ls.clear();
+                                    let _ = win.location().reload();
+                                }
+                            }
+                        >
+                            "🗑️ 清除記憶紀錄"
+                        </button>
+
+                        <span class=move || if panel_open.get() { "panel-status-badge badge-open" } else { "panel-status-badge" }>
+                            <span class="badge-text">{move || if panel_open.get() { "收合設定" } else { "修改參數" }}</span>
+                            <span class="badge-arrow">"▾"</span>
+                        </span>
+                    </div>
+                </div>
                 <Show when=move || panel_open.get()>
                     <div class="controls-body">
 
@@ -1393,10 +1417,48 @@ fn App() -> impl IntoView {
                                                 HistInvMode::Monthly => "切換為：總成本輸入",
                                                 HistInvMode::Total => "切換為：每月投入輸入",
                                             }
-                                            on:click=move |_| set_hist_inv_mode.update(|m| *m = match *m {
-                                                HistInvMode::Monthly => HistInvMode::Total,
-                                                HistInvMode::Total => HistInvMode::Monthly,
-                                            })
+                                            on:click=move |_| {
+                                                let current_mode = hist_inv_mode.get();
+                                                let months = (hist_years() * 12) as f64;
+
+                                                match current_mode {
+                                                    HistInvMode::Monthly => {
+                                                        // 1. 從「每月」切換到「總額」
+                                                        // 算出當前實際總投入（元）
+                                                        let current_total_twd = h_inv_k.get() * THOUSAND_TO_TWD * months;
+                                                        // 換算為萬元單位
+                                                        let new_total_wan = current_total_twd / WAN_TO_TWD;
+                                                        // 四捨五入
+                                                        let rounded_wan = new_total_wan .round();
+
+                                                        // 同步更新總額相關的 Signals
+                                                        set_hist_total_wan.set(rounded_wan);
+                                                        set_hist_total_wan_raw.set(rounded_wan.to_string());
+
+                                                        // 執行模式切換
+                                                        set_hist_inv_mode.set(HistInvMode::Total);
+                                                    }
+                                                    HistInvMode::Total => {
+                                                        // 2. 從「總額」切換到「每月」
+                                                        let new_h_inv_k = if months > 0.0 {
+                                                            let current_total_twd = hist_total_wan.get() * WAN_TO_TWD;
+                                                            // 算回每月投入並換算成千元單位
+                                                            (current_total_twd / months) / THOUSAND_TO_TWD
+                                                        } else {
+                                                            0.0
+                                                        };
+                                                        // 四捨五入到整數千元
+                                                        let rounded_k = new_h_inv_k.round();
+
+                                                        // 同步更新每月相關的 Signals
+                                                        set_h_inv_k.set(rounded_k);
+                                                        set_h_inv_k_raw.set(rounded_k.to_string());
+
+                                                        // 執行模式切換
+                                                        set_hist_inv_mode.set(HistInvMode::Monthly);
+                                                    }
+                                                }
+                                            }
                                         >{move || match hist_inv_mode.get() {
                                             HistInvMode::Monthly => "📅 每月投入",
                                             HistInvMode::Total => "📦 總成本",
@@ -1551,9 +1613,10 @@ fn App() -> impl IntoView {
                                         />
                                         <div class="input-hint">{move || {
                                             let amt = format_twd_financial(f_inv_k.get() * THOUSAND_TO_TWD);
+                                            let amt_yearly = format_twd_financial(f_inv_k.get() * 12.0 * THOUSAND_TO_TWD);
                                             match future_mode.get() {
-                                                FutureMode::Invest   => format!("= 未來每月名目投入 {}", amt),
-                                                FutureMode::Withdraw => format!("= 未來每月實質提領 {}", amt),
+                                                FutureMode::Invest   => format!("= 未來每月名目投入 {} 等同每年 {}", amt, amt_yearly),
+                                                FutureMode::Withdraw => format!("= 未來每月實質提領 {} 等同每年 {}", amt, amt_yearly),
                                                 FutureMode::Stop     => String::new(),
                                             }
                                         }}</div>
@@ -1563,18 +1626,44 @@ fn App() -> impl IntoView {
 
                             <div class="control-group">
                                 <label class="control-label">
-                                    {move || if hist_years() > 0 { "📉 七：未來通膨率" } else { "📉 六：未來通膨率" }}
+                                    {move || if hist_years() > 0 { "📉 七：未來通膨率（%）" } else { "📉 六：未來通膨率（%）" }}
                                 </label>
-                                <div class="select-wrapper">
-                                    <select class="control-select" on:change=move |ev| {
-                                        if let Ok(val) = event_target_value(&ev).parse::<usize>() { set_inflation_rate.set(val); }
-                                    }>
-                                        {move || (0..=10).map(|r| {
-                                            let label = if r == 0 { "🚫 不考慮通膨 (0%)".to_string() } else { format!("📉 通膨率：{}%/年", r) };
-                                            view! { <option value=r selected=move || inflation_rate.get() == r>{label}</option> }
-                                        }).collect::<Vec<_>>()}
-                                    </select>
-                                </div>
+                                <input type="number" class="number-input"
+                                    min="0.0" max="10.0" step="0.1" inputmode="decimal"
+                                    // 初始化只給一次值，打字時絕對不要讓 Leptos 去改變這個 value 屬性
+                                    value=inflation_rate_raw.get_untracked()
+                                    on:input=move |ev| {
+                                        let val = event_target_value(&ev);
+                                        set_inflation_rate_raw.set(val.clone());
+
+                                        // 放行所有包含小數點的輸入，只要最後能解析成功就偷偷更新後台計算流
+                                        if let Ok(v) = val.parse::<f64>() {
+                                            set_inflation_rate.set(v.clamp(0.0, 10.0));
+                                        }
+                                    }
+                                    on:blur=move |#[allow(unused)]ev| {
+                                        // 只有在滑鼠移開時，才強行把輸入框裡面的字刷新成標準格式（例如 2.5）
+                                        let v = inflation_rate.get().clamp(0.0, 10.0);
+                                        set_inflation_rate.set(v);
+                                        let formatted = format!("{:.1}", v);
+                                        set_inflation_rate_raw.set(formatted.clone());
+
+                                        #[cfg(target_family = "wasm")]
+                                        {
+                                            // 手動去修改 DOM 節點的值，此時使用者已經沒在打字，所以不會卡死
+                                            if let Some(target) = ev.target().and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok()) {
+                                                target.set_value(&formatted);
+                                            }
+                                        }
+                                    }
+                                />
+                                <div class="input-hint">{move || {
+                                    if inflation_rate.get() <= f64::EPSILON {
+                                        "🚫 不考慮通膨影響".to_string()
+                                    } else {
+                                        format!("預期貨幣購買力每年貶值 {:.1}%", inflation_rate.get())
+                                    }
+                                }}</div>
                             </div>
 
                         </div>
@@ -1743,7 +1832,7 @@ mod tests {
         let h_inv = 10000.0; // 歷史每月投入 1 萬
         let f_inv = 20000.0; // 未來每月改投 2 萬
         let anchor_roi_pct = 10.5; // 精確的 f64 歷史年化報酬率 (非整數)
-        let inflation_rate = 2;
+        let inflation_rate = 2.0;
         let hist_years = 5;
         let total_years = 15;
         let lump_sum = 2000000.0; // 現有資產 200 萬
@@ -1790,7 +1879,7 @@ mod tests {
         let h_inv = 30000.0;
         let f_inv = 0.0;
         let anchor_roi_pct = 8.35; // 精確歷史 ROI
-        let inflation_rate = 3;
+        let inflation_rate = 3.0;
         let hist_years = 10;
         let total_years = 30;
         let lump_sum = 5000000.0; // 現有資產 500 萬
@@ -1860,7 +1949,7 @@ mod tests {
         let h_inv = 10000.0;
         let f_inv = -15000.0; // 模擬每月實質提領 1.5 萬
         let anchor_roi_pct = 6.0; // 剛好是整數的情況
-        let inflation_rate = 2; // 通膨年化 2%
+        let inflation_rate = 2.0; // 通膨年化 2%
         let hist_years = 0; // 全新起點，直接進入未來
         let total_years = 20;
         let lump_sum = 1000000.0; // 從 100 萬起始資金直接出發
@@ -1876,7 +1965,7 @@ mod tests {
         );
 
         let total_months = total_years * 12;
-        let inflation_monthly_rate = (1.0 + (inflation_rate as f64) / 100.0).powf(1.0 / 12.0) - 1.0;
+        let inflation_monthly_rate = (1.0 + inflation_rate / 100.0).powf(1.0 / 12.0) - 1.0;
 
         // 🎯 金融鐵律：在未來期間任何一個時間點，名目金額必定等於 實質金額 * 累計通膨率
         for m in 1..=total_months {
@@ -1905,7 +1994,7 @@ mod tests {
         let lump_sum = 3500000.0; // 設定 350 萬一桶金
 
         // 🎯 測試極端邊界：若歷史年數為 0，第 0 個月應正常初始化為傳入的 lump_sum
-        let trends = calculate_true_pivot_trends(20000.0, 20000.0, 7.0, 2, 0, 10, lump_sum);
+        let trends = calculate_true_pivot_trends(20000.0, 20000.0, 7.0, 2.0, 0, 10, lump_sum);
 
         for route in trends.iter() {
             let (nominal_start, real_start) = route.data[0];
@@ -1919,7 +2008,7 @@ mod tests {
         let h_inv = 8000.0;
         let f_inv = -5000.0;
         let anchor_roi_pct = 6.5;
-        let inflation_rate = 3;
+        let inflation_rate = 3.0;
         let hist_years = 3;
         let total_years = 10;
         let lump_sum = 500_000.0;
@@ -1978,7 +2067,7 @@ mod tests {
         let h_inv = 0.0;
         let f_inv = 0.0;
         let anchor_roi_pct = 10.0;
-        let inflation_rate = 0;
+        let inflation_rate = 0.0;
         let hist_years = 0;
         let total_years = 1; // 模擬 1 年 (12個月)
         let lump_sum = 100_000.0;
@@ -2033,7 +2122,7 @@ mod tests {
             anchor_roi_pct: Some(8.5),
             lump_sum: 2_000_000.0,
             f_inv: -8000.0,
-            inflation_rate: 2,
+            inflation_rate: 2.0,
             window_width: 1200,
         };
 
@@ -2196,7 +2285,7 @@ mod tests {
             anchor_roi_pct: None, // 未設定時應 fallback 到 7.0
             lump_sum: 0.0,
             f_inv: 0.0,
-            inflation_rate: 0,
+            inflation_rate: 0.0,
             window_width: 1920,
         };
         assert_eq!(ci_none.anchor_roi_pct(), DEFAULT_ANCHOR_ROI_PCT);
@@ -2218,7 +2307,7 @@ mod tests {
             anchor_roi_pct: Some(8.0),
             lump_sum: 0.0,
             f_inv: 0.0,
-            inflation_rate: 2,
+            inflation_rate: 2.0,
             window_width: 1920,
         };
         let expected = 30_000.0 * 60.0;
@@ -2234,7 +2323,7 @@ mod tests {
 
     #[test]
     fn test_trend_route_exactly_one_anchor() {
-        let trends = calculate_true_pivot_trends(20_000.0, 0.0, 7.0, 0, 5, 20, 1_000_000.0);
+        let trends = calculate_true_pivot_trends(20_000.0, 0.0, 7.0, 0.0, 5, 20, 1_000_000.0);
         // 恰好整數（7.0%）：anchor 和整數線重合，總共仍是 22 條（7.0 不在 0..=20 的 key 裡）
         // 只需確保 is_anchor 旗標恰好一條
         let anchor_count = trends.iter().filter(|r| r.is_anchor).count();
@@ -2247,7 +2336,7 @@ mod tests {
     #[test]
     fn test_trend_route_integer_anchor_deduplication() {
         // 整數 ROI（如 10.0%）應被 HashMap 去重，不重複計算
-        let trends = calculate_true_pivot_trends(10_000.0, 0.0, 10.0, 2, 5, 15, 500_000.0);
+        let trends = calculate_true_pivot_trends(10_000.0, 0.0, 10.0, 2.0, 5, 15, 500_000.0);
         // 10.0% 是整數，所以 key=10000 對應同一條，總共仍 21 條而不是 22
         assert_eq!(
             trends.len(),
@@ -2260,7 +2349,8 @@ mod tests {
 
     #[test]
     fn test_trend_route_sorted_ascending() {
-        let trends = calculate_true_pivot_trends(30_000.0, -10_000.0, 8.37, 3, 10, 30, 3_000_000.0);
+        let trends =
+            calculate_true_pivot_trends(30_000.0, -10_000.0, 8.37, 3.0, 10, 30, 3_000_000.0);
         // 所有 roi_pct 應嚴格遞增排序
         for w in trends.windows(2) {
             assert!(
@@ -2286,7 +2376,7 @@ mod tests {
         let total_years = 5;
 
         let trends =
-            calculate_true_pivot_trends(0.0, f_inv, 5.0, 0, hist_years, total_years, lump_sum);
+            calculate_true_pivot_trends(0.0, f_inv, 5.0, 0.0, hist_years, total_years, lump_sum);
 
         let anchor = trends.iter().find(|r| r.is_anchor).unwrap();
         let final_val = anchor.data[total_years * 12].0;
@@ -2305,7 +2395,7 @@ mod tests {
         let lump_sum = 10_000_000.0;
         let f_inv = -10_000.0;
 
-        let trends = calculate_true_pivot_trends(0.0, f_inv, 12.0, 0, 0, 10, lump_sum);
+        let trends = calculate_true_pivot_trends(0.0, f_inv, 12.0, 0.0, 0, 10, lump_sum);
 
         let anchor = trends.iter().find(|r| r.is_anchor).unwrap();
         let final_val = anchor.data[10 * 12].0;

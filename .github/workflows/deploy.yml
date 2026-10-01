@@ -37,6 +37,8 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Run Clippy Lints
+        env:
+          RUSTFLAGS: "-A warnings" # 忽略所有依賴套件的警告，只對你的主專案進行 -D warnings 檢查
         run: |
           cargo clippy --tests -- -D warnings
           cargo clippy --target wasm32-unknown-unknown -- -D warnings
