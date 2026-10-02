@@ -1,12 +1,8 @@
-#[cfg(target_family = "wasm")]
 use gloo_timers::callback::Timeout;
 use leptos::prelude::*;
-#[cfg(target_family = "wasm")]
 use std::cell::RefCell;
 use std::collections::HashMap;
-#[cfg(target_family = "wasm")]
 use std::rc::Rc;
-#[cfg(target_family = "wasm")]
 use wasm_bindgen::{JsCast, prelude::Closure};
 
 use crate::utils::{format_twd_financial, generate_plot};
@@ -24,7 +20,6 @@ pub(crate) const DEFAULT_ANCHOR_ROI_PCT: f64 = 7.0;
 pub(crate) const NARROW_WIDTH_BREAKPOINT: u32 = 640;
 
 /// 使用者輸入變動後，延遲多久才觸發重新計算/繪圖（避免每個字元都重算）。
-#[cfg(target_family = "wasm")]
 pub(crate) const DEBOUNCE_MS: i32 = 300;
 
 /// Y 軸（對數座標）視覺下限：低於此金額一律顯示在 1 萬的位置，避免 log(0) 爆炸。
@@ -487,44 +482,33 @@ pub(crate) fn App() -> impl IntoView {
     };
     // 視窗寬度 signal（響應旋轉 / resize）
     let initial_width: u32 = {
-        #[cfg(target_family = "wasm")]
-        {
-            web_sys::window()
-                .and_then(|w| w.inner_width().ok())
-                .and_then(|v| v.as_f64())
-                .unwrap_or(1920.0) as u32
-        }
-        #[cfg(not(target_family = "wasm"))]
-        {
-            1920
-        }
+        web_sys::window()
+            .and_then(|w| w.inner_width().ok())
+            .and_then(|v| v.as_f64())
+            .unwrap_or(1920.0) as u32
     };
     let (window_width, set_window_width) = signal(initial_width);
-    #[cfg(not(target_family = "wasm"))]
-    let _ = set_window_width;
-    #[cfg(target_family = "wasm")]
-    {
-        let active_timeout = Rc::new(RefCell::new(None::<Timeout>));
-        let timeout_clone = Rc::clone(&active_timeout);
 
-        let cb = Closure::<dyn Fn()>::new(move || {
-            let timeout_inner = Rc::clone(&timeout_clone);
+    let active_timeout = Rc::new(RefCell::new(None::<Timeout>));
+    let timeout_clone = Rc::clone(&active_timeout);
 
-            // 刷新定時器：將新的 Timeout 塞入，舊的 Timeout 離開作用域時會自動調用 Drop 取消定時
-            *timeout_inner.borrow_mut() = Some(Timeout::new(150, move || {
-                if let Some(win) = web_sys::window() {
-                    if let Some(v) = win.inner_width().ok().and_then(|v| v.as_f64()) {
-                        set_window_width.set(v as u32);
-                    }
-                }
-            }));
-        });
+    let cb = Closure::<dyn Fn()>::new(move || {
+        let timeout_inner = Rc::clone(&timeout_clone);
 
-        if let Some(win) = web_sys::window() {
-            let _ = win.add_event_listener_with_callback("resize", cb.as_ref().unchecked_ref());
-        }
-        cb.forget();
+        // 刷新定時器：將新的 Timeout 塞入，舊的 Timeout 離開作用域時會自動調用 Drop 取消定時
+        *timeout_inner.borrow_mut() = Some(Timeout::new(150, move || {
+            if let Some(win) = web_sys::window()
+                && let Some(v) = win.inner_width().ok().and_then(|v| v.as_f64())
+            {
+                set_window_width.set(v as u32);
+            }
+        }));
+    });
+
+    if let Some(win) = web_sys::window() {
+        let _ = win.add_event_listener_with_callback("resize", cb.as_ref().unchecked_ref());
     }
+    cb.forget();
 
     // 1. 聚合所有參數為 ChartInput（Memo 確保只在依賴變動時重算）
     let active_chart_input_memo = Memo::new(move |_| ChartInput {
@@ -542,25 +526,18 @@ pub(crate) fn App() -> impl IntoView {
     // 2. 300ms debounce：防止每個字元觸發重算
     let (debounced_chart_input, set_debounced_chart_input) =
         signal(active_chart_input_memo.get_untracked());
-    #[cfg(target_family = "wasm")]
     let effect_timeout_holder = std::rc::Rc::new(std::cell::RefCell::new(
         None::<gloo_timers::callback::Timeout>,
     ));
 
     Effect::new(move |_| {
         let new_ci = active_chart_input_memo.get();
-        #[cfg(target_family = "wasm")]
-        {
-            let holder = std::rc::Rc::clone(&effect_timeout_holder);
 
-            *holder.borrow_mut() = Some(Timeout::new(DEBOUNCE_MS as u32, move || {
-                set_debounced_chart_input.set(new_ci);
-            }));
-        }
-        #[cfg(not(target_family = "wasm"))]
-        {
+        let holder = std::rc::Rc::clone(&effect_timeout_holder);
+
+        *holder.borrow_mut() = Some(Timeout::new(DEBOUNCE_MS as u32, move || {
             set_debounced_chart_input.set(new_ci);
-        }
+        }));
     });
 
     // 3. 複利計算快取（只依賴 debounced_chart_input，下游多次讀取不重算）
@@ -586,27 +563,19 @@ pub(crate) fn App() -> impl IntoView {
 
     Effect::new(move |_| {
         if let Some(p) = plot_resource.get() {
-            #[cfg(target_family = "wasm")]
+            let element_id = "financial-graph";
+            if let Some(doc) = web_sys::window().and_then(|w| w.document())
+                && doc.get_element_by_id(element_id).is_some()
             {
-                let element_id = "financial-graph";
-                if let Some(doc) = web_sys::window().and_then(|w| w.document())
-                    && doc.get_element_by_id(element_id).is_some()
-                {
-                    leptos::task::spawn_local(async move {
-                        let _ = plotly::bindings::react(element_id, &p).await;
-                    });
-                }
-            }
-            #[cfg(not(target_family = "wasm"))]
-            {
-                let _ = p;
+                leptos::task::spawn_local(async move {
+                    let _ = plotly::bindings::react(element_id, &p).await;
+                });
             }
         }
     });
 
     Effect::new(move |_| {
         let _ = panel_open.get();
-        #[cfg(target_family = "wasm")]
         if let Some(window) = web_sys::window() {
             let _ = window.request_animation_frame(&js_sys::Function::new_no_args(
                 "setTimeout(function() { if(window.Plotly && document.getElementById('financial-graph')){ Plotly.Plots.resize(document.getElementById('financial-graph')); } }, 50);",
@@ -659,7 +628,6 @@ pub(crate) fn App() -> impl IntoView {
                             style="background-color: #1E293B; color: #94A3B8; border: 1px solid #334155; padding: 4px 10px; border-radius: 4px; font-size: 12px; cursor: pointer; transition: all 0.2s;"
                             on:click=move |ev| {
                                 ev.stop_propagation(); // 🛑 重要：防止點擊清除時同時觸發面板收合
-                                #[cfg(target_family = "wasm")]
                                 if let Some(win) = web_sys::window()
                                     && let Some(ls) = win.local_storage().ok().flatten() {
                                     let _ = ls.clear();
@@ -1012,12 +980,9 @@ pub(crate) fn App() -> impl IntoView {
                                         let formatted = format!("{:.1}", v);
                                         set_inflation_rate_raw.set(formatted.clone());
 
-                                        #[cfg(target_family = "wasm")]
-                                        {
-                                            // 手動去修改 DOM 節點的值，此時使用者已經沒在打字，所以不會卡死
-                                            if let Some(target) = ev.target().and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok()) {
-                                                target.set_value(&formatted);
-                                            }
+                                        // 手動去修改 DOM 節點的值，此時使用者已經沒在打字，所以不會卡死
+                                        if let Some(target) = ev.target().and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok()) {
+                                            target.set_value(&formatted);
                                         }
                                     }
                                 />
@@ -1089,8 +1054,7 @@ pub(crate) fn App() -> impl IntoView {
             <div class="chart-header">
                 <button class="screenshot-btn" title="下載圖表 PNG（1920×1080）"
                     on:click=move |_| {
-                        #[cfg(target_family = "wasm")]
-                        { let _ = js_sys::eval("Plotly.downloadImage(document.getElementById('financial-graph'),{format:'png',width:1920,height:1080,filename:'financial_simulator'})"); }
+                        let _ = js_sys::eval("Plotly.downloadImage(document.getElementById('financial-graph'),{format:'png',width:1920,height:1080,filename:'financial_simulator'})");
                     }
                 >"📷 截圖"</button>
             </div>
@@ -1110,10 +1074,14 @@ pub(crate) fn App() -> impl IntoView {
 }
 
 #[cfg(test)]
+wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+#[cfg(test)]
 mod tests {
+    use wasm_bindgen_test::*;
+
     use super::*;
 
-    #[test]
+    #[wasm_bindgen_test]
     fn test_calculate_true_pivot_trends_basic_structure() {
         let h_inv = 10000.0; // 歷史每月投入 1 萬
         let f_inv = 20000.0; // 未來每月改投 2 萬
@@ -1160,7 +1128,7 @@ mod tests {
         assert!((anchor_route.roi_pct - 10.5).abs() < f64::EPSILON);
     }
 
-    #[test]
+    #[wasm_bindgen_test]
     fn test_historical_period_consistency() {
         let h_inv = 30000.0;
         let f_inv = 0.0;
@@ -1230,7 +1198,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[wasm_bindgen_test]
     fn test_future_inflation_law() {
         let h_inv = 10000.0;
         let f_inv = -15000.0; // 模擬每月實質提領 1.5 萬
@@ -1275,7 +1243,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[wasm_bindgen_test]
     fn test_zero_years_edge_case() {
         let lump_sum = 3500000.0; // 設定 350 萬一桶金
 
@@ -1289,7 +1257,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[wasm_bindgen_test]
     fn test_pivot_point_cohesion_and_divergence() {
         let h_inv = 8000.0;
         let f_inv = -5000.0;
@@ -1348,7 +1316,7 @@ mod tests {
     }
 
     /// 擴充測試 5：極端環境測試 ── 0 本金、0 投入、0 通膨下的純數學複利驗證
-    #[test]
+    #[wasm_bindgen_test]
     fn test_zero_environment_compounding() {
         let h_inv = 0.0;
         let f_inv = 0.0;
@@ -1398,7 +1366,7 @@ mod tests {
     }
 
     /// 擴充測試 6：新版單一結構體 ChartInput 整合繪圖引擎配置校驗
-    #[test]
+    #[wasm_bindgen_test]
     fn test_chart_input_and_plot_generation() {
         let ci = ChartInput {
             start_age: 35,
@@ -1433,7 +1401,7 @@ mod tests {
     // =====================================================================
 
     /// 基本正確性：已知本金 + 月投 + 月數，算出來的 ROI 反推回去應接近原始值
-    #[test]
+    #[wasm_bindgen_test]
     fn test_infer_roi_pct_basic_roundtrip() {
         let h_inv = 10_000.0;
         let expected_annual_roi = 8.0_f64;
@@ -1458,20 +1426,20 @@ mod tests {
     }
 
     /// 邊界：hist_months = 0 必須回傳 None
-    #[test]
+    #[wasm_bindgen_test]
     fn test_infer_roi_pct_zero_months_returns_none() {
         assert!(infer_roi_pct(1_000_000.0, 10_000.0, 0).is_none());
     }
 
     /// 邊界：h_inv <= 0 必須回傳 None（無法除以零，也沒有意義）
-    #[test]
+    #[wasm_bindgen_test]
     fn test_infer_roi_pct_zero_h_inv_returns_none() {
         assert!(infer_roi_pct(500_000.0, 0.0, 60).is_none());
         assert!(infer_roi_pct(500_000.0, -1000.0, 60).is_none());
     }
 
     /// 資產 = 0：代表所有月投都虧光，應推算出接近 -100% 的極端負值
-    #[test]
+    #[wasm_bindgen_test]
     fn test_infer_roi_pct_zero_asset() {
         let result = infer_roi_pct(0.0, 10_000.0, 12);
         // 資產完全歸零代表每月都蒸發，ROI 必然極負
@@ -1480,7 +1448,7 @@ mod tests {
     }
 
     /// 資產為負數：帶債情況下應能推算出負報酬率
-    #[test]
+    #[wasm_bindgen_test]
     fn test_infer_roi_pct_negative_asset() {
         let result = infer_roi_pct(-200_000.0, 10_000.0, 60);
         assert!(result.is_some());
@@ -1492,7 +1460,7 @@ mod tests {
     }
 
     /// 資產略高於純本金：對應接近 0% 的低報酬
-    #[test]
+    #[wasm_bindgen_test]
     fn test_infer_roi_pct_near_zero_roi() {
         let h_inv = 10_000.0;
         let months = 12_usize;
@@ -1507,7 +1475,7 @@ mod tests {
     }
 
     /// 精確度：ROI 反推誤差應小於 0.01%
-    #[test]
+    #[wasm_bindgen_test]
     fn test_infer_roi_pct_precision() {
         // 測試非整數的精確 ROI（12.75%）
         let h_inv = 50_000.0;
@@ -1527,7 +1495,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[wasm_bindgen_test]
     fn test_chart_input_anchor_roi_fallback() {
         let ci_none = ChartInput {
             start_age: 30,
@@ -1549,7 +1517,7 @@ mod tests {
         assert_eq!(ci_some.anchor_roi_pct(), 12.5);
     }
 
-    #[test]
+    #[wasm_bindgen_test]
     fn test_chart_input_h_inv_sum() {
         let ci = ChartInput {
             start_age: 25,
@@ -1569,7 +1537,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[wasm_bindgen_test]
     fn test_trend_route_exactly_one_anchor() {
         let trends = calculate_true_pivot_trends(20_000.0, 0.0, 7.0, 0.0, 5, 20, 1_000_000.0);
         // 恰好整數（7.0%）：anchor 和整數線重合，總共仍是 22 條（7.0 不在 0..=20 的 key 裡）
@@ -1581,7 +1549,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[wasm_bindgen_test]
     fn test_trend_route_integer_anchor_deduplication() {
         // 整數 ROI（如 10.0%）應被 HashMap 去重，不重複計算
         let trends = calculate_true_pivot_trends(10_000.0, 0.0, 10.0, 2.0, 5, 15, 500_000.0);
@@ -1595,7 +1563,7 @@ mod tests {
         assert_eq!(anchor_count, 1);
     }
 
-    #[test]
+    #[wasm_bindgen_test]
     fn test_trend_route_sorted_ascending() {
         let trends =
             calculate_true_pivot_trends(30_000.0, -10_000.0, 8.37, 3.0, 10, 30, 3_000_000.0);
@@ -1615,7 +1583,7 @@ mod tests {
     // =====================================================================
 
     /// 大量提領：資產應在模擬期間某個時間點降到 0 以下
-    #[test]
+    #[wasm_bindgen_test]
     fn test_withdrawal_depletion_scenario() {
         // 起始 100 萬，每月提領 5 萬（實質），報酬 5%
         let lump_sum = 1_000_000.0;
@@ -1637,7 +1605,7 @@ mod tests {
     }
 
     /// 小量提領：充足資產 + 高報酬 → 即使提領，資產仍持續成長
-    #[test]
+    #[wasm_bindgen_test]
     fn test_small_withdrawal_still_grows() {
         // 起始 1000 萬，每月提領 1 萬，報酬 12%
         let lump_sum = 10_000_000.0;
@@ -1660,7 +1628,7 @@ mod tests {
     // =====================================================================
 
     /// 測試大於等於兆級的巨額邊界
-    #[test]
+    #[wasm_bindgen_test]
     fn test_format_twd_trillion_values() {
         assert_eq!(format_twd_financial(1_000_000_000_000.0), "1.0兆");
         assert_eq!(format_twd_financial(3_500_000_000_000.0), "3.5兆");
@@ -1668,34 +1636,34 @@ mod tests {
     }
 
     /// 恰好 100,000,000 元的億級邊界
-    #[test]
+    #[wasm_bindgen_test]
     fn test_format_twd_exactly_one_hundred_million() {
         assert_eq!(format_twd_financial(100_000_000.0), "1.0億");
         assert_eq!(format_twd_financial(123_450_000_000.0), "1,234.5億");
     }
 
     /// 恰好 10,000 元的邊界
-    #[test]
+    #[wasm_bindgen_test]
     fn test_format_twd_exactly_ten_thousand() {
         assert_eq!(format_twd_financial(10_000.0), "1萬");
         assert_eq!(format_twd_financial(15_500.0), "1.6萬"); // 四捨五入示意
     }
 
     /// 9,999 元應屬於「元」級，不跨越萬
-    #[test]
+    #[wasm_bindgen_test]
     fn test_format_twd_just_below_ten_thousand() {
         assert_eq!(format_twd_financial(9_999.0), "9,999元");
     }
 
     /// 負值應正確帶負號，且選擇正確的單位
-    #[test]
+    #[wasm_bindgen_test]
     fn test_format_twd_negative_values() {
         assert_eq!(format_twd_financial(-50_000.0), "-5萬");
         assert_eq!(format_twd_financial(-100_000_000.0), "-1.0億");
     }
 
     /// 「總投入成本」模式：由總額 ÷ 已投月數，反推每月投入金額（總成本單位為「萬元」）
-    #[test]
+    #[wasm_bindgen_test]
     fn test_hist_total_mode_derives_monthly_from_total() {
         let hist_years = 5usize;
         let months = (hist_years * 12) as f64;

@@ -6,13 +6,11 @@ on:
       - main
   workflow_dispatch: 
 
-# 關鍵：賦予 Actions 官方 Pages 布署所需的安全性權限
 permissions:
   contents: read
   pages: write
   id-token: write
 
-# 避免多次 push 時的布署工作互相衝突
 concurrency:
   group: "pages"
   cancel-in-progress: true
@@ -39,18 +37,18 @@ jobs:
       - name: Run Clippy Lints
         env:
           RUSTFLAGS: "-A warnings" # 忽略所有依賴套件的警告，只對你的主專案進行 -D warnings 檢查
-        run: |
-          cargo clippy --tests -- -D warnings
-          cargo clippy --target wasm32-unknown-unknown -- -D warnings
+        run: cargo clippy --all-targets -- -D warnings
 
-      - name: Run Unit & Integration Tests
-        run: cargo test
+      - name: Install wasm-pack
+        run: curl "https://rustwasm.github.io/wasm-pack/installer/init.sh" -sSf | sh
+
+      - name: Run Unit & Integration Tests (WASM)
+        run: wasm-pack test --firefox --headless
 
       - name: Install Trunk
         run: |
-          if ! command -v trunk &> /dev/null; then
-            cargo install trunk --locked
-          fi
+          curl -L "https://github.com/trunk-rs/trunk/releases/download/v0.21.14/trunk-x86_64-unknown-linux-gnu.tar.gz" | tar -xzf - -C /usr/local/bin
+          trunk --version
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
@@ -69,9 +67,6 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     needs: build
     runs-on: ubuntu-latest
-    # 修正點 2：宣告輸出變數，將 deployment 步驟產生的網址正確映射到 Job 頂層的 url
-    outputs:
-      page_url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Deploy to GitHub Pages
         id: deployment

@@ -18,7 +18,7 @@ pub(crate) fn write_with_commas(buf: &mut String, val: f64, precision: usize) ->
 
     let s = format!("{:.1$}", rounded, precision);
     let parts: Vec<&str> = s.split('.').collect();
-    let num_part = parts.get(0).copied().unwrap_or("");
+    let num_part = parts.first().copied().unwrap_or("");
 
     if val < 0.0 {
         buf.push('-');
@@ -84,13 +84,13 @@ pub(crate) fn append_twd_financial(buf: &mut String, val: f64) {
         let is_round = (abs_wan - abs_wan.round()).abs() < 0.01;
         let decimals = if is_round { 0 } else { 1 };
         let _ = write_with_commas(buf, val_in_wan, decimals);
-        buf.push_str("萬");
+        buf.push('萬');
         return;
     }
 
     // 3. 處理小於 1 萬的數字（直接顯示千分位整數）
     let _ = write_with_commas(buf, val, 0);
-    buf.push_str("元");
+    buf.push('元');
 }
 
 pub(crate) fn format_twd_financial(val: f64) -> String {
@@ -710,7 +710,11 @@ pub(crate) fn generate_plot(ci: ChartInput, sorted_trends: Vec<TrendRoute>) -> P
 }
 
 #[cfg(test)]
+wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+#[cfg(test)]
 mod tests {
+    use wasm_bindgen_test::*;
+
     use super::*;
 
     fn format_with_commas(val: f64, precision: usize) -> String {
@@ -719,7 +723,7 @@ mod tests {
         s
     }
 
-    #[test]
+    #[wasm_bindgen_test]
     fn test_format_with_commas_basic() {
         // 測試純千分位逗號與精準度
         assert_eq!(format_with_commas(1234.56, 1), "1,234.6");
@@ -728,7 +732,7 @@ mod tests {
         assert_eq!(format_with_commas(0.0, 2), "0.00");
     }
 
-    #[test]
+    #[wasm_bindgen_test]
     fn test_twd_financial_under_ten_thousand() {
         // 🎯 測試低於一萬的狀況：直接顯示千分位整數，不帶「萬」或「億」
         assert_eq!(format_twd_financial(0.0), "0元");
@@ -737,7 +741,7 @@ mod tests {
         assert_eq!(format_twd_financial(-8500.0), "-8,500元");
     }
 
-    #[test]
+    #[wasm_bindgen_test]
     fn test_twd_financial_wan_level() {
         // 🎯 測試萬級距 (1萬 ~ 9999萬) 且包含整除與不整除的細緻邏輯
         assert_eq!(format_twd_financial(10000.0), "1萬");
@@ -754,7 +758,7 @@ mod tests {
         assert_eq!(format_twd_financial(-250000.0), "-25萬");
     }
 
-    #[test]
+    #[wasm_bindgen_test]
     fn test_twd_financial_yi_level() {
         // 🎯 測試億級距邊界條件 (≥ 100,000,000)
         assert_eq!(format_twd_financial(100000000.0), "1.0億");
@@ -763,7 +767,7 @@ mod tests {
         assert_eq!(format_twd_financial(-1200000000.0), "-12.0億");
     }
 
-    #[test]
+    #[wasm_bindgen_test]
     fn test_text_row_alignment() {
         let mut buf = String::with_capacity(256);
         let mut v_buf = String::with_capacity(32);
@@ -796,7 +800,7 @@ mod tests {
         assert!(buf.contains("800萬"));
     }
 
-    #[test]
+    #[wasm_bindgen_test]
     fn test_fmt_roi_label_integer() {
         // 整數 ROI 格式（數字欄固定寬度 5）
         assert_eq!(fmt_roi_label(5.0, false), "ROI      5%");
@@ -804,7 +808,7 @@ mod tests {
         assert_eq!(fmt_roi_label(20.0, false), "ROI     20%");
     }
 
-    #[test]
+    #[wasm_bindgen_test]
     fn test_fmt_roi_label_float_consistency() {
         // 四捨五入到小數點後二位，右對齊補到固定寬度 6
         assert_eq!(fmt_roi_label(8.5, true), "ROI   8.50%");
@@ -814,7 +818,7 @@ mod tests {
     }
 
     // 改用數值寬度格式化，-99.90% ~ 50.00% 全範圍都應正確顯示。
-    #[test]
+    #[wasm_bindgen_test]
     fn test_fmt_roi_label_double_digit_negative_regression() {
         assert_eq!(fmt_roi_label(50.0, true), "ROI  50.00%");
         assert_eq!(fmt_roi_label(-25.5, true), "ROI -25.50%");
