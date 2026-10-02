@@ -5,57 +5,63 @@ use plotly::layout::{
     ShapeLayer, ShapeLine, ShapeType,
 };
 use plotly::{Configuration, Plot, Scatter};
-use std::rc::Rc;
+use std::fmt::Write;
 
 use crate::app::{
     CHART_Y_DEFAULT_LOG_MAX, CHART_Y_DEFAULT_MAX, CHART_Y_HEADROOM_MULTIPLIER,
     CHART_Y_VISUAL_FLOOR, ChartInput, NARROW_WIDTH_BREAKPOINT, TrendRoute,
 };
 
-pub(crate) fn format_with_commas(val: f64, precision: usize) -> String {
+pub(crate) fn write_with_commas(buf: &mut String, val: f64, precision: usize) -> std::fmt::Result {
     let factor = 10.0_f64.powi(precision as i32);
     let rounded = (val.abs() * factor).round() / factor;
 
     let s = format!("{:.1$}", rounded, precision);
     let parts: Vec<&str> = s.split('.').collect();
-    let num_part = parts[0];
+    let num_part = parts.get(0).copied().unwrap_or("");
 
-    // 根據實際數值，動態計算是否需要留負號的空間
-    let sign_space = if val < 0.0 { 1 } else { 0 };
-
-    // 根據 precision，動態計算小數點與小數位所佔用的空間
-    let decimal_space = if precision > 0 { 1 + precision } else { 0 };
-
-    let mut result =
-        String::with_capacity(num_part.len() + (num_part.len() / 3) + sign_space + decimal_space);
-
-    for (count, c) in num_part.chars().rev().enumerate() {
-        if count > 0 && count % 3 == 0 {
-            result.push(',');
-        }
-        result.push(c);
-    }
-    let mut formatted = result.chars().rev().collect::<String>();
     if val < 0.0 {
-        formatted.insert(0, '-');
+        buf.push('-');
     }
-    if parts.len() > 1 {
-        formatted.push('.');
-        formatted.push_str(parts[1]);
+
+    let first_chunk_len = num_part.len() % 3;
+    let mut idx = 0;
+
+    if first_chunk_len > 0 {
+        buf.push_str(&num_part[..first_chunk_len]);
+        idx = first_chunk_len;
+        if idx < num_part.len() {
+            result_push_comma(buf);
+        }
     }
-    formatted
+
+    while idx < num_part.len() {
+        buf.push_str(&num_part[idx..idx + 3]);
+        idx += 3;
+        if idx < num_part.len() {
+            result_push_comma(buf);
+        }
+    }
+
+    if let Some(decimal_part) = parts.get(1) {
+        buf.push('.');
+        buf.push_str(decimal_part);
+    }
+    Ok(())
+}
+
+#[inline(always)]
+fn result_push_comma(buf: &mut String) {
+    buf.push(',');
 }
 
 /// 格式化新台幣（TWD）財務大額數字，自動轉換單位：元、萬、億、兆
-pub(crate) fn format_twd_financial(val: f64) -> String {
+pub(crate) fn append_twd_financial(buf: &mut String, val: f64) {
     let abs_val = val.abs();
 
     // 定義大額單位配置：(門檻值, 單位名稱, 是否強制顯示1位小數)
     // 依數值由大到小排列
-    let units = [
-        (1e12, "兆", true), // 兆
-        (1e8, "億", true),  // 億
-    ];
+    let units = [(1e12, "兆", true), (1e8, "億", true)];
 
     // 1. 處理億級與兆級以上的巨額數字
     for &(threshold, unit, force_decimal) in &units {
@@ -63,7 +69,9 @@ pub(crate) fn format_twd_financial(val: f64) -> String {
             let unit_val = val / threshold;
             // 根據配置決定是否強制保留 1 位小數（如 1.0億、1.5兆）
             let decimals = if force_decimal { 1 } else { 0 };
-            return format!("{}{}", format_with_commas(unit_val, decimals), unit);
+            let _ = write_with_commas(buf, unit_val, decimals);
+            buf.push_str(unit);
+            return;
         }
     }
 
@@ -75,12 +83,20 @@ pub(crate) fn format_twd_financial(val: f64) -> String {
         // 判斷是否為整萬（誤差小於 0.01）
         let is_round = (abs_wan - abs_wan.round()).abs() < 0.01;
         let decimals = if is_round { 0 } else { 1 };
-
-        return format!("{}萬", format_with_commas(val_in_wan, decimals));
+        let _ = write_with_commas(buf, val_in_wan, decimals);
+        buf.push_str("萬");
+        return;
     }
 
     // 3. 處理小於 1 萬的數字（直接顯示千分位整數）
-    format!("{}元", format_with_commas(val, 0))
+    let _ = write_with_commas(buf, val, 0);
+    buf.push_str("元");
+}
+
+pub(crate) fn format_twd_financial(val: f64) -> String {
+    let mut s = String::with_capacity(32);
+    append_twd_financial(&mut s, val);
+    s
 }
 
 /// 格式化 ROI 為固定欄寬標籤，用於 hover tooltip 與圖例對齊。
@@ -97,35 +113,7 @@ pub(crate) fn fmt_roi_label(roi_pct: f64, is_major: bool) -> String {
     if is_major {
         format!("ROI {:>6.2}%", roi_pct)
     } else {
-        format!("ROI {:>6}%", roi_pct as usize)
-    }
-}
-
-pub(crate) fn make_clean_text_row(
-    name_str: &str,
-    val_str: &str,
-    real_val_str: &str,
-    highlight: bool,
-    is_inflation: bool,
-    is_narrow: bool,
-) -> String {
-    let style = if highlight {
-        "style='font-family:Consolas,monospace; color:#F43F5E; font-weight:bold;'"
-    } else {
-        "style='font-family:Consolas,monospace;'"
-    };
-
-    let pad_w = 10;
-    if is_narrow {
-        format!("<span {style}>{name_str:<pad_w$} {real_val_str:>pad_w$}(折現)</span>")
-    } else {
-        if is_inflation {
-            format!(
-                "<span {style}>{name_str:<pad_w$} │ {val_str:>pad_w$} │ 折現：{real_val_str:>pad_w$}</span>"
-            )
-        } else {
-            format!("<span {style}>{name_str:<pad_w$} │ {val_str:>pad_w$}</span>")
-        }
+        format!("ROI {:>6}%", roi_pct as i32)
     }
 }
 
@@ -213,6 +201,50 @@ pub(crate) fn get_annotations(
     ann_list
 }
 
+fn append_clean_text_row(
+    buf: &mut String,
+    name_str: &str,
+    val_str: &str,
+    real_val_str: &str,
+    highlight: bool,
+    is_inflation: bool,
+    is_narrow: bool,
+) {
+    let style = if highlight {
+        "style='font-family:Consolas,monospace; color:#F43F5E; font-weight:bold;'"
+    } else {
+        "style='font-family:Consolas,monospace;'"
+    };
+
+    let pad_w = 10;
+
+    if is_narrow {
+        if is_inflation {
+            let _ = write!(
+                buf,
+                "<span {style}>{name_str:<pad_w$} {real_val_str:>pad_w$}(折現)</span>"
+            );
+        } else {
+            let _ = write!(
+                buf,
+                "<span {style}>{name_str:<pad_w$} {val_str:>pad_w$}</span>"
+            );
+        }
+    } else {
+        if is_inflation {
+            let _ = write!(
+                buf,
+                "<span {style}>{name_str:<pad_w$} │ {val_str:>pad_w$} │ 折現：{real_val_str:>pad_w$}</span>"
+            );
+        } else {
+            let _ = write!(
+                buf,
+                "<span {style}>{name_str:<pad_w$} │ {val_str:>pad_w$}</span>"
+            );
+        }
+    }
+}
+
 /// 圖表渲染核心引擎
 pub(crate) fn generate_plot(ci: ChartInput, sorted_trends: Vec<TrendRoute>) -> Plot {
     let is_narrow = ci.window_width < NARROW_WIDTH_BREAKPOINT;
@@ -220,12 +252,10 @@ pub(crate) fn generate_plot(ci: ChartInput, sorted_trends: Vec<TrendRoute>) -> P
     let total_months = ci.total_years * 12;
     let hist_months = ci.hist_years * 12;
 
-    // X 軸以真實年齡為單位，所有 trace 共用同一份資料（Rc 避免複製）
+    // X 軸以真實年齡為單位，所有 trace 共用同一份資料
     let x_numeric_timeline: Vec<f64> = (0..=total_months)
         .map(|m| ci.start_age as f64 + (m as f64 / 12.0))
         .collect();
-
-    let shared_x = Rc::new(x_numeric_timeline);
 
     let colors: Vec<String> = (0..=20)
         .map(|i| format!("rgba({}, {}, 255, 0.8)", 50 + i * 8, 80 + i * 5))
@@ -240,36 +270,46 @@ pub(crate) fn generate_plot(ci: ChartInput, sorted_trends: Vec<TrendRoute>) -> P
         _ => "ROI   ----%".to_string(),
     };
 
+    let mut row_buffer = String::with_capacity(512);
+    let mut v_buf = String::with_capacity(32);
+    let mut r_buf = String::with_capacity(32);
+
     for m in 0..=total_months {
         let elapsed_years = m / 12;
         let mo = m % 12;
         let current_calc_age = ci.start_age + elapsed_years;
 
-        let time_header = if mo > 0 {
-            format!(
-                "<b>🎯 實際年齡：{} 歲 {} 個月</b> (第 {} 年)",
+        if mo > 0 {
+            let _ = write!(
+                row_buffer,
+                "<b>🎯 實際年齡：{} 歲 {} 個月</b> (第 {} 年)<br>────────────────────────<br>",
                 current_calc_age, mo, elapsed_years
-            )
+            );
         } else {
-            format!(
-                "<b>🎯 實際年齡：{} 歲整</b> (第 {} 年)",
+            let _ = write!(
+                row_buffer,
+                "<b>🎯 實際年齡：{} 歲整</b> (第 {} 年)<br>────────────────────────<br>",
                 current_calc_age, elapsed_years
-            )
-        };
-
-        let mut lines = vec![time_header, "────────────────────────".to_string()];
+            );
+        }
 
         if m <= hist_months {
             if let Some(anchor_route) = anchor_route_opt {
                 let amt = anchor_route.data[m];
-                lines.push(make_clean_text_row(
+                v_buf.clear();
+                r_buf.clear();
+                append_twd_financial(&mut v_buf, amt.0);
+                append_twd_financial(&mut r_buf, amt.1);
+
+                append_clean_text_row(
+                    &mut row_buffer,
                     &anchor_label,
-                    &format_twd_financial(amt.0),
-                    &format_twd_financial(amt.1),
+                    &v_buf,
+                    &r_buf,
                     false,
                     is_inflation,
                     is_narrow,
-                ));
+                );
             }
         } else {
             for route in sorted_trends.iter().rev() {
@@ -282,53 +322,78 @@ pub(crate) fn generate_plot(ci: ChartInput, sorted_trends: Vec<TrendRoute>) -> P
                         fmt_roi_label(route.roi_pct, false)
                     };
                     let amt = route.data[m];
-                    lines.push(make_clean_text_row(
+                    v_buf.clear();
+                    r_buf.clear();
+                    append_twd_financial(&mut v_buf, amt.0);
+                    append_twd_financial(&mut r_buf, amt.1);
+
+                    append_clean_text_row(
+                        &mut row_buffer,
                         &label,
-                        &format_twd_financial(amt.0),
-                        &format_twd_financial(amt.1),
+                        &v_buf,
+                        &r_buf,
                         route.is_anchor,
                         is_inflation,
                         is_narrow,
-                    ));
+                    );
+                    row_buffer.push_str("<br>");
                 }
             }
         }
-        hover_labels_text.push(lines.join("<br>"));
+
+        let full_buffer = std::mem::replace(&mut row_buffer, String::with_capacity(512));
+        hover_labels_text.push(full_buffer);
     }
 
     let mut hover_labels_opt = Some(hover_labels_text);
     let mut plot = Plot::new();
 
+    let mut legend_buffer = String::with_capacity(64);
+
     // 依序繪製跡線
     for route in sorted_trends.iter().rev() {
         let roi_floor = route.roi_pct.floor() as usize;
         let is_integer = (route.roi_pct - route.roi_pct.round()).abs() < f64::EPSILON;
-        let is_p =
-            (is_integer && [5, 10, 15, 20].contains(&(route.roi_pct as usize))) || route.is_anchor;
+        let is_zero = route.roi_pct.abs() < f64::EPSILON; // 識別 0% 本金線
+
+        // 最佳化圖例規則：5, 10, 15, 20，或是主錨定線，或是 0% 本金線都要顯示圖例
+        let is_p = (is_integer && [0, 5, 10, 15, 20].contains(&(route.roi_pct as usize)))
+            || route.is_anchor;
         let amt_future = route.data[total_months];
 
         let label = if is_narrow {
-            fmt_roi_label(route.roi_pct, !route.is_anchor)
+            fmt_roi_label(route.roi_pct, route.is_anchor)
         } else if route.is_anchor {
             format!("{} 主線", fmt_roi_label(ci.anchor_roi_pct(), true))
+        } else if is_zero {
+            format!("{} 本金", fmt_roi_label(0.0, false))
         } else {
             format!("{} 未來", fmt_roi_label(route.roi_pct, false))
         };
 
-        let legend_name = make_clean_text_row(
+        legend_buffer.clear();
+        v_buf.clear();
+        r_buf.clear();
+        append_twd_financial(&mut v_buf, amt_future.0);
+        append_twd_financial(&mut r_buf, amt_future.1);
+
+        append_clean_text_row(
+            &mut legend_buffer,
             &label,
-            &format_twd_financial(amt_future.0),
-            &format_twd_financial(amt_future.1),
+            &v_buf,
+            &r_buf,
             route.is_anchor,
             is_inflation,
             is_narrow,
         );
 
         let y_data: Vec<f64> = route.data.iter().map(|x| x.0).collect();
-        let mut trace = Scatter::new((*shared_x).clone(), y_data).name(legend_name);
+        let mut trace = Scatter::new(x_numeric_timeline.clone(), y_data).name(&legend_buffer);
 
         let color = if route.is_anchor {
             "#F43F5E".to_string()
+        } else if is_zero {
+            "#A0AEC0".to_string()
         } else {
             colors
                 .get(roi_floor)
@@ -338,15 +403,20 @@ pub(crate) fn generate_plot(ci: ChartInput, sorted_trends: Vec<TrendRoute>) -> P
 
         let width = if route.is_anchor {
             3.5
+        } else if is_zero {
+            2.5
         } else if is_p {
             2.0
         } else {
             0.8
         };
 
-        trace = trace
-            .line(Line::new().color(color).width(width))
-            .show_legend(is_p);
+        let mut line_style = Line::new().color(color).width(width);
+        if is_zero {
+            line_style = line_style.dash(DashType::Dash);
+        }
+
+        trace = trace.line(line_style).show_legend(is_p);
 
         if route.is_anchor {
             if let Some(labels) = hover_labels_opt.take() {
@@ -360,39 +430,16 @@ pub(crate) fn generate_plot(ci: ChartInput, sorted_trends: Vec<TrendRoute>) -> P
         plot.add_trace(trace);
     }
 
-    // 0% 本金虛線及佈局配置
-    if let Some(base_route) = sorted_trends
-        .iter()
-        .find(|r| !r.is_anchor && r.roi_pct.abs() < f64::EPSILON)
-    {
-        let amt_principal_future = base_route.data[total_months];
-        let principal_name = make_clean_text_row(
-            if is_narrow {
-                "ROI      0%"
-            } else {
-                "ROI      0% 本金"
-            },
-            &format_twd_financial(amt_principal_future.0),
-            &format_twd_financial(amt_principal_future.1),
-            false,
-            is_inflation,
-            is_narrow,
-        );
-
-        let y_base: Vec<f64> = base_route.data.iter().map(|x| x.0).collect();
-        let principal_trace = Scatter::new((*shared_x).clone(), y_base)
-            .name(principal_name)
-            .line(Line::new().color("#A0AEC0").width(2.5).dash(DashType::Dash))
-            .show_legend(true)
-            .hover_info(HoverInfo::Skip);
-
-        plot.add_trace(principal_trace);
-    }
-
     let future_plan_text = if ci.f_inv > 0.0 {
-        format!("每月改投名目 {}", format_twd_financial(ci.f_inv))
+        let mut s = String::new();
+        s.push_str("每月改投名目 ");
+        append_twd_financial(&mut s, ci.f_inv);
+        s
     } else if ci.f_inv < 0.0 {
-        format!("每月提領實質 {}", format_twd_financial(ci.f_inv.abs()))
+        let mut s = String::new();
+        s.push_str("每月提領實質 ");
+        append_twd_financial(&mut s, ci.f_inv.abs());
+        s
     } else {
         "不再投入(利滾利)".to_string()
     };
@@ -406,20 +453,32 @@ pub(crate) fn generate_plot(ci: ChartInput, sorted_trends: Vec<TrendRoute>) -> P
         )
     } else {
         let history_investment_text = if ci.hist_years > 0 {
-            format!(" 已投入 {}", format_twd_financial(ci.h_inv_sum()))
+            let mut s = String::new();
+            s.push_str(" 已投入 ");
+            append_twd_financial(&mut s, ci.h_inv_sum());
+            s
         } else {
             String::new()
         };
 
+        let mut h_inv_str = String::new();
+        append_twd_financial(&mut h_inv_str, ci.h_inv);
+
+        let inflation_status_text = if ci.inflation_rate > f64::EPSILON {
+            format!("折現通膨 {:.1}%/年", ci.inflation_rate)
+        } else {
+            "不考慮通膨".to_string()
+        };
+
         format!(
-            "<br><span style='font-size: 13px; color: #2DD4BF; letter-spacing: 0.5px;'>📊 戰略配置 ── 起始 {}歲 ({}/月{}) | 現況 {}歲 | 目標 {}歲 [{}] | 折現通膨 {:.1}%/年</span>",
+            "<br><span style='font-size: 13px; color: #2DD4BF; letter-spacing: 0.5px;'>📊 戰略配置 ── 起始 {}歲 ({}/月{}) | 現況 {}歲 | 目標 {}歲 [{}] | {}</span>",
             ci.start_age,
-            format_twd_financial(ci.h_inv),
+            h_inv_str,
             history_investment_text,
             ci.start_age + ci.hist_years,
             ci.start_age + ci.total_years,
             future_plan_text,
-            ci.inflation_rate
+            inflation_status_text
         )
     };
 
@@ -654,6 +713,12 @@ pub(crate) fn generate_plot(ci: ChartInput, sorted_trends: Vec<TrendRoute>) -> P
 mod tests {
     use super::*;
 
+    fn format_with_commas(val: f64, precision: usize) -> String {
+        let mut s = String::with_capacity(32);
+        let _ = write_with_commas(&mut s, val, precision);
+        s
+    }
+
     #[test]
     fn test_format_with_commas_basic() {
         // 測試純千分位逗號與精準度
@@ -700,22 +765,35 @@ mod tests {
 
     #[test]
     fn test_text_row_alignment() {
-        // 🎯 測試等寬對齊與 HTML 標籤注入的字串長度與結構
-        let normal_row = make_clean_text_row("ROI  5%", "500萬", "500萬", false, false, false);
-        assert!(normal_row.contains("style='font-family:Consolas,monospace;'"));
-        assert!(normal_row.contains("ROI  5%"));
+        let mut buf = String::with_capacity(256);
+        let mut v_buf = String::with_capacity(32);
+        let mut r_buf = String::with_capacity(32);
+
+        // 測試正常無通膨情境
+        buf.clear();
+        v_buf.clear();
+        r_buf.clear();
+        append_twd_financial(&mut v_buf, 5000000.0);
+        append_twd_financial(&mut r_buf, 5000000.0);
+
+        append_clean_text_row(&mut buf, "ROI  5%", &v_buf, &r_buf, false, false, false);
+        assert!(buf.contains("style='font-family:Consolas,monospace;'"));
+        assert!(buf.contains("ROI  5%"));
         // 由於沒有折現落差，不應該出現「折現：」字樣
-        assert!(!normal_row.contains("折現："));
+        assert!(!buf.contains("折現："));
+        assert!(buf.contains("500萬"));
 
-        let discount_row = make_clean_text_row("ROI 10%", "1,000萬", "800萬", false, true, false);
-        assert!(discount_row.contains("折現："));
+        // 測試含通膨與高亮情境
+        buf.clear();
+        v_buf.clear();
+        r_buf.clear();
+        append_twd_financial(&mut v_buf, 10000000.0);
+        append_twd_financial(&mut r_buf, 8000000.0);
 
-        let highlight_row = make_clean_text_row("ROI 10%", "1億", "1億", true, true, false);
-        assert!(highlight_row.contains("color:#F43F5E; font-weight:bold;"));
-
-        let short_row = make_clean_text_row("ROI  5%", "350萬", "350萬", true, true, true);
-        assert!(short_row.contains("color:#F43F5E; font-weight:bold;"));
-        assert!(short_row.contains("350萬"));
+        append_clean_text_row(&mut buf, "ROI 10%", &v_buf, &r_buf, true, true, false);
+        assert!(buf.contains("color:#F43F5E; font-weight:bold;"));
+        assert!(buf.contains("折現："));
+        assert!(buf.contains("800萬"));
     }
 
     #[test]

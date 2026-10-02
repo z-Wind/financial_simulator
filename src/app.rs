@@ -1,8 +1,13 @@
+#[cfg(target_family = "wasm")]
+use gloo_timers::callback::Timeout;
 use leptos::prelude::*;
-use std::cell::Cell;
+#[cfg(target_family = "wasm")]
+use std::cell::RefCell;
 use std::collections::HashMap;
 #[cfg(target_family = "wasm")]
-use wasm_bindgen::JsCast;
+use std::rc::Rc;
+#[cfg(target_family = "wasm")]
+use wasm_bindgen::{JsCast, prelude::Closure};
 
 use crate::utils::{format_twd_financial, generate_plot};
 
@@ -124,22 +129,41 @@ pub(crate) fn infer_roi_pct(current_asset: f64, h_inv: f64, hist_months: usize) 
     if hist_months == 0 || h_inv <= 0.0 {
         return None;
     }
+
     let mut lo = -99.0_f64;
     let mut hi = 50.0_f64;
-    for _ in 0..64 {
-        let mid = (lo + hi) * 0.5;
-        let r = (1.0 + mid * 0.01).powf(1.0 / 12.0) - 1.0;
-        let mut bal = 0.0;
-        let r_plus_1 = 1.0 + r;
-        for _ in 0..hist_months {
-            bal = (bal + h_inv) * r_plus_1;
+    let months_f = hist_months as f64;
+
+    for _ in 0..32 {
+        if (hi - lo).abs() < 1e-4 {
+            break;
         }
+
+        let mid = (lo + hi) * 0.5;
+        let r_annual = 1.0 + mid * 0.01;
+
+        // 避免年化報酬率小於等於 0 導致開方失真防禦
+        if r_annual <= 0.0 {
+            lo = mid;
+            continue;
+        }
+
+        let r_monthly = r_annual.powf(1.0 / 12.0);
+
+        // 使用等比級數求和公式 (Annuity Due): Bal = h_inv * ((1 + r)^n - 1) / r * (1 + r)
+        let bal = if r_monthly.abs() < 1e-9 {
+            h_inv * months_f
+        } else {
+            h_inv * ((r_monthly.powf(months_f) - 1.0) / (r_monthly - 1.0)) * r_monthly
+        };
+
         if bal < current_asset {
             lo = mid;
         } else {
             hi = mid;
         }
     }
+
     let final_roi = (lo + hi) * 0.5;
     Some(if final_roi.abs() < 0.005 {
         0.0
@@ -243,10 +267,6 @@ pub(crate) fn calculate_true_pivot_trends(
     });
 
     routes
-}
-
-thread_local! {
-    static DEBOUNCE_TIMER: Cell<i32> = const { Cell::new(-1) };
 }
 
 // =====================================================================
@@ -484,14 +504,22 @@ pub(crate) fn App() -> impl IntoView {
     let _ = set_window_width;
     #[cfg(target_family = "wasm")]
     {
-        let cb = wasm_bindgen::closure::Closure::<dyn Fn()>::new(move || {
-            if let Some(w) = web_sys::window()
-                .and_then(|w| w.inner_width().ok())
-                .and_then(|v| v.as_f64())
-            {
-                set_window_width.set(w as u32);
-            }
+        let active_timeout = Rc::new(RefCell::new(None::<Timeout>));
+        let timeout_clone = Rc::clone(&active_timeout);
+
+        let cb = Closure::<dyn Fn()>::new(move || {
+            let timeout_inner = Rc::clone(&timeout_clone);
+
+            // 刷新定時器：將新的 Timeout 塞入，舊的 Timeout 離開作用域時會自動調用 Drop 取消定時
+            *timeout_inner.borrow_mut() = Some(Timeout::new(150, move || {
+                if let Some(win) = web_sys::window() {
+                    if let Some(v) = win.inner_width().ok().and_then(|v| v.as_f64()) {
+                        set_window_width.set(v as u32);
+                    }
+                }
+            }));
         });
+
         if let Some(win) = web_sys::window() {
             let _ = win.add_event_listener_with_callback("resize", cb.as_ref().unchecked_ref());
         }
@@ -514,30 +542,20 @@ pub(crate) fn App() -> impl IntoView {
     // 2. 300ms debounce：防止每個字元觸發重算
     let (debounced_chart_input, set_debounced_chart_input) =
         signal(active_chart_input_memo.get_untracked());
+    #[cfg(target_family = "wasm")]
+    let effect_timeout_holder = std::rc::Rc::new(std::cell::RefCell::new(
+        None::<gloo_timers::callback::Timeout>,
+    ));
 
     Effect::new(move |_| {
         let new_ci = active_chart_input_memo.get();
         #[cfg(target_family = "wasm")]
         {
-            DEBOUNCE_TIMER.with(|id| {
-                if let Some(w) = web_sys::window() {
-                    let old = id.get();
-                    if old >= 0 {
-                        w.clear_timeout_with_handle(old);
-                    }
-                    let cb = wasm_bindgen::closure::Closure::once(move || {
-                        set_debounced_chart_input.set(new_ci);
-                    });
-                    let new_id = w
-                        .set_timeout_with_callback_and_timeout_and_arguments_0(
-                            cb.as_ref().unchecked_ref(),
-                            DEBOUNCE_MS,
-                        )
-                        .unwrap_or(-1);
-                    cb.forget();
-                    id.set(new_id);
-                }
-            });
+            let holder = std::rc::Rc::clone(&effect_timeout_holder);
+
+            *holder.borrow_mut() = Some(Timeout::new(DEBOUNCE_MS as u32, move || {
+                set_debounced_chart_input.set(new_ci);
+            }));
         }
         #[cfg(not(target_family = "wasm"))]
         {
